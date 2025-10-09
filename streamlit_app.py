@@ -64,6 +64,7 @@ if not api_key:
     st.error("No PDL API key found. Add `PDL_API_KEY` to Streamlit Secrets or environment.")
     st.stop()
 
+# NOTE: The PDLClient (pdl_client.py) must be using the Sandbox URL for free testing.
 client = PDLClient(api_key)
 
 # ---- File upload
@@ -139,9 +140,10 @@ if uploaded:
                         # Ensure value is compatible with JSON/API, e.g., convert numpy types
                         # Using pd.np is deprecated; checking for direct float/int is safer here
                         if isinstance(val, (int, float)):
-                             params[pdl_param] = val
+                            params[pdl_param] = val # CORRECTED INDENTATION HERE
                         else:
                             params[pdl_param] = val
+                            
             if requested_fields:
                 params["fields"] = requested_fields
             return {"params": params}
@@ -164,7 +166,7 @@ if uploaded:
                 progress.progress(min(1.0, (i + 1) / num_batches))
                 continue
 
-            # Ensure responses are correctly extracted to a list, regardless of PDL response format.
+            # Robustly extract responses from the payload
             if isinstance(payload, list):
                 responses = payload
             elif isinstance(payload, dict) and "responses" in payload:
@@ -182,16 +184,22 @@ if uploaded:
                 for f in requested_fields:
                     out[f] = data.get(f)
 
-                # Special handling for job subfields
-                job = data.get("job", {}) or {}
-                if "job_title" in requested_fields:
-                    out["job_title"] = job.get("title")
-                if "job_company_name" in requested_fields:
-                    company = job.get("company", {}) or {}
-                    out["job_company_name"] = company.get("name")
-                if "job_company_website" in requested_fields:
-                    company = job.get("company", {}) or {}
-                    out["job_company_website"] = company.get("website")
+                # --- CORRECTED JOB EXTRACTION LOGIC ---
+                # PDL enrichment returns experience as a list. Use the first item for current job info.
+                if any(f.startswith("job_") for f in requested_fields):
+                    experience = data.get("experience", [])
+                    primary_job = experience[0] if experience and isinstance(experience[0], dict) else {}
+                    primary_company = primary_job.get("company", {})
+
+                    if "job_title" in requested_fields:
+                        out["job_title"] = primary_job.get("title")
+
+                    if "job_company_name" in requested_fields:
+                        out["job_company_name"] = primary_company.get("name")
+
+                    if "job_company_website" in requested_fields:
+                        out["job_company_website"] = primary_company.get("website")
+                # --- END CORRECTED JOB EXTRACTION LOGIC ---
 
                 out["_raw"] = data
                 out_rows.append(out)
