@@ -2,7 +2,9 @@
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-PDL_BULK_ENDPOINT = "https://api.peopledatalabs.com/v5/person/bulk"  # docs confirm. 
+# CHANGE: Switched to the Sandbox API URL for free testing.
+# This URL does not use production credits and returns synthetic data.
+PDL_BULK_ENDPOINT = "https://sandbox.api.peopledatalabs.com/v5/bulk/person" 
 
 class PDLClient:
     def __init__(self, api_key: str, timeout: float = 30.0):
@@ -21,3 +23,5 @@ class PDLClient:
         resp.raise_for_status()
         return resp.json()
 
+# REMINDER: To revert to production (paid) mode, change the endpoint back to:
+# PDL_BULK_ENDPOINT = "https://api.peopledatalabs.com/v5/person/bulk"
