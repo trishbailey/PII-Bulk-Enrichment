@@ -102,46 +102,58 @@ if uploaded:
         num_batches = math.ceil(len(request_objs) / batch_size)
         out_rows = []
 
-        for i in range(num_batches):
-            start = i * batch_size
-            end = min(start + batch_size, len(request_objs))
-            batch = request_objs[start:end]
+        # Process in batches
+num_batches = math.ceil(len(request_objs) / batch_size)
+out_rows = []
 
-            try:
-                payload = client.bulk_enrich(batch)
-            except Exception as e:
-                errors.append({"batch_index": i, "error": str(e)})
-                progress.progress(min(1.0, (i + 1) / num_batches))
-                continue
+for i in range(num_batches):
+    start = i * batch_size
+    end = min(start + batch_size, len(request_objs))
+    batch = request_objs[start:end]
 
-            # The bulk response carries per-item status and data
-            # PDL returns 200 for matches; 404 for no match (billed per 200). 
-            for item in payload.get("responses", []):
-                status = item.get("status", None)
-                data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
-                out = {"status": status}
+    try:
+        payload = client.bulk_enrich(batch)
+    except Exception as e:
+        errors.append({"batch_index": i, "error": str(e)})
+        progress.progress(min(1.0, (i + 1) / num_batches))
+        continue
 
-                # Flatten selected fields from data where possible
-                # Direct fields:
-                for f in requested_fields:
-                    out[f] = data.get(f)
+    # Handle both response formats:
+    #   1) Correct: a list of per-item responses.
+    #   2) Legacy: {"responses": [...]}.
+    if isinstance(payload, list):
+        responses = payload
+    elif isinstance(payload, dict) and "responses" in payload:
+        responses = payload["responses"]
+    else:
+        st.warning(f"Unexpected response format for batch {i}: {type(payload)}")
+        responses = []
 
-                # Nicer shorthands from nested objects if present
-                job = data.get("job", {}) or {}
-                if "job_title" in requested_fields:
-                    out["job_title"] = job.get("title")
-                if "job_company_name" in requested_fields:
-                    company = job.get("company", {}) or {}
-                    out["job_company_name"] = company.get("name")
-                if "job_company_website" in requested_fields:
-                    company = job.get("company", {}) or {}
-                    out["job_company_website"] = company.get("website")
+    for item in responses:
+        status = item.get("status")
+        data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
+        out = {"status": status}
 
-                # Keep raw record for advanced users
-                out["_raw"] = data
-                out_rows.append(out)
+        # Flatten selected fields from the returned profile data
+        for f in requested_fields:
+            out[f] = data.get(f)
 
-            progress.progress(min(1.0, (i + 1) / num_batches))
+        # Optionally extract job info if requested
+        job = data.get("job", {}) or {}
+        if "job_title" in requested_fields:
+            out["job_title"] = job.get("title")
+        if "job_company_name" in requested_fields:
+            company = job.get("company", {}) or {}
+            out["job_company_name"] = company.get("name")
+        if "job_company_website" in requested_fields:
+            company = job.get("company", {}) or {}
+            out["job_company_website"] = company.get("website")
+
+        # Keep raw data for JSON download
+        out["_raw"] = data
+        out_rows.append(out)
+
+    progress.progress(min(1.0, (i + 1) / num_batches))
 
         # Build output DataFrame
         if out_rows:
