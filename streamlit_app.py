@@ -7,6 +7,7 @@ from typing import List, Dict
 import pandas as pd
 import streamlit as st
 
+# Assuming these files are in your project structure
 from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
 from pdl_client import PDLClient
 
@@ -101,68 +102,71 @@ if uploaded:
         # Process in batches
         num_batches = math.ceil(len(request_objs) / batch_size)
         out_rows = []
+        
+        # ---------------------------------------------------------------------
+        # CRITICAL FIX: The loop below must be inside the st.button block.
+        # ---------------------------------------------------------------------
+        for i in range(num_batches):
+            start = i * batch_size
+            end = min(start + batch_size, len(request_objs))
+            batch = request_objs[start:end]
 
-        # Process in batches
-num_batches = math.ceil(len(request_objs) / batch_size)
-out_rows = []
+            try:
+                payload = client.bulk_enrich(batch)
+            except Exception as e:
+                errors.append({"batch_index": i, "error": str(e)})
+                progress.progress(min(1.0, (i + 1) / num_batches))
+                continue
 
-for i in range(num_batches):
-    start = i * batch_size
-    end = min(start + batch_size, len(request_objs))
-    batch = request_objs[start:end]
+            # Handle both response formats:
+            #   1) Correct: a list of per-item responses.
+            #   2) Legacy: {"responses": [...]}.
+            if isinstance(payload, list):
+                responses = payload
+            elif isinstance(payload, dict) and "responses" in payload:
+                responses = payload["responses"]
+            else:
+                st.warning(f"Unexpected response format for batch {i}: {type(payload)}")
+                responses = []
 
-    try:
-        payload = client.bulk_enrich(batch)
-    except Exception as e:
-        errors.append({"batch_index": i, "error": str(e)})
-        progress.progress(min(1.0, (i + 1) / num_batches))
-        continue
+            for item in responses:
+                status = item.get("status")
+                # Ensure data is a dictionary before trying to access keys
+                data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
+                out = {"status": status}
 
-    # Handle both response formats:
-    #   1) Correct: a list of per-item responses.
-    #   2) Legacy: {"responses": [...]}.
-    if isinstance(payload, list):
-        responses = payload
-    elif isinstance(payload, dict) and "responses" in payload:
-        responses = payload["responses"]
-    else:
-        st.warning(f"Unexpected response format for batch {i}: {type(payload)}")
-        responses = []
+                # Flatten selected fields from the returned profile data
+                for f in requested_fields:
+                    out[f] = data.get(f)
 
-    for item in responses:
-        status = item.get("status")
-        data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
-        out = {"status": status}
+                # Optionally extract job info if requested
+                job = data.get("job", {}) or {}
+                if "job_title" in requested_fields:
+                    out["job_title"] = job.get("title")
+                if "job_company_name" in requested_fields:
+                    company = job.get("company", {}) or {}
+                    out["job_company_name"] = company.get("name")
+                if "job_company_website" in requested_fields:
+                    company = job.get("company", {}) or {}
+                    out["job_company_website"] = company.get("website")
 
-        # Flatten selected fields from the returned profile data
-        for f in requested_fields:
-            out[f] = data.get(f)
+                # Keep raw data for JSON download
+                out["_raw"] = data
+                out_rows.append(out)
 
-        # Optionally extract job info if requested
-        job = data.get("job", {}) or {}
-        if "job_title" in requested_fields:
-            out["job_title"] = job.get("title")
-        if "job_company_name" in requested_fields:
-            company = job.get("company", {}) or {}
-            out["job_company_name"] = company.get("name")
-        if "job_company_website" in requested_fields:
-            company = job.get("company", {}) or {}
-            out["job_company_website"] = company.get("website")
-
-        # Keep raw data for JSON download
-        out["_raw"] = data
-        out_rows.append(out)
-
-    progress.progress(min(1.0, (i + 1) / num_batches))
-
+            progress.progress(min(1.0, (i + 1) / num_batches))
+        # ---------------------------------------------------------------------
+        # Output results logic
+        # ---------------------------------------------------------------------
+        
         # Build output DataFrame
         if out_rows:
             out_df = pd.DataFrame(out_rows)
 
             st.success(f"Completed. Rows processed: {total}. Output rows: {len(out_rows)}.")
-            st.dataframe(out_df.head(50), use_container_width=True)
+            st.dataframe(out_df.drop(columns=["_raw"], errors="ignore").head(50), use_container_width=True)
 
-            # Download
+            # Download CSV
             csv_bytes = out_df.drop(columns=["_raw"], errors="ignore").to_csv(index=False).encode("utf-8")
             st.download_button("Download CSV", data=csv_bytes, file_name="pdl_enriched.csv", mime="text/csv")
 
@@ -176,4 +180,3 @@ for i in range(num_batches):
         if errors:
             with st.expander("Errors", expanded=False):
                 st.write(pd.DataFrame(errors))
-
