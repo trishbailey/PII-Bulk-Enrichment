@@ -7,13 +7,15 @@ from ast import literal_eval # ADDED: For safely parsing string representations 
 
 import pandas as pd
 import streamlit as st
+import xlsxwriter # Added implicitly by pandas.to_excel, but good practice if explicitly using io.BytesIO
 
 # Assuming these files are in your project structure
+# You must have field_config.py and pdl_client.py available.
 from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
 from pdl_client import PDLClient
 
 # -----------------------------------------------------------------------------
-# Utility Functions for Data Cleaning (ADDED)
+# Utility Functions for Data Cleaning
 # -----------------------------------------------------------------------------
 
 def join_all_emails(emails: List[Dict]) -> str | None:
@@ -77,7 +79,7 @@ if uploaded:
         df = pd.read_excel(uploaded)
 
     st.subheader("Preview")
-    # Updated: Changed use_container_width=True to width='stretch' to avoid future deprecation warning
+    # FIX: Use width='stretch' to avoid deprecation warning
     st.dataframe(df.head(20), width="stretch")
 
     if df.empty:
@@ -132,11 +134,14 @@ if uploaded:
             params = {}
             for pdl_param, colname in colmap.items():
                 val = row.get(colname)
+                # Handles profiles as a comma-separated string that needs to be converted to a list
                 if pdl_param == "profiles" and isinstance(val, str):
                     params[pdl_param] = [v.strip() for v in val.split(",") if v.strip()]
+                # Handles all other parameters, skipping NaNs
                 else:
                     if pd.notna(val):
-                        params[pdl_param] = val
+                        # Ensure value is compatible with JSON/API, e.g., convert numpy types
+                        params[pdl_param] = val.item() if isinstance(val, (pd.np.integer, pd.np.floating)) else val
             if requested_fields:
                 params["fields"] = requested_fields
             return {"params": params}
@@ -159,8 +164,7 @@ if uploaded:
                 progress.progress(min(1.0, (i + 1) / num_batches))
                 continue
 
-            # FIX: Ensure responses are correctly extracted to a list, regardless of format.
-            # This directly addresses the 'list' object has no attribute 'get' error.
+            # FIX: Ensure responses are correctly extracted to a list, regardless of PDL response format.
             if isinstance(payload, list):
                 responses = payload
             elif isinstance(payload, dict) and "responses" in payload:
@@ -170,7 +174,6 @@ if uploaded:
                 responses = []
 
             for item in responses:
-                # FIX: Use .get() safely, as 'item' is now definitely expected to be a dict
                 status = item.get("status")
                 # Ensure data is a dictionary before trying to access keys
                 data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
@@ -179,6 +182,7 @@ if uploaded:
                 for f in requested_fields:
                     out[f] = data.get(f)
 
+                # Special handling for job subfields
                 job = data.get("job", {}) or {}
                 if "job_title" in requested_fields:
                     out["job_title"] = job.get("title")
@@ -195,17 +199,19 @@ if uploaded:
             progress.progress(min(1.0, (i + 1) / num_batches))
 
         # ---- Post-processing output
+        # FIX: Indentation corrected to be consistent with the outer `if st.button` block.
         if out_rows:
             out_df = pd.DataFrame(out_rows)
 
-            # --- START: DATA FLATTENING LOGIC (FIX/ADDITION) ---
+            # --- START: DATA FLATTENING LOGIC (for clean output) ---
             
             # Check if emails were requested and flatten if present
             if 'emails' in out_df.columns:
-                # Safely parse strings to list-of-dicts if needed
+                # Safely parse strings to list-of-dicts if needed (important for loading saved data)
                 def _maybe_parse(val):
                     if isinstance(val, str) and val.strip().startswith('[') and val.strip().endswith(']'):
                         try:
+                            # Use literal_eval to safely convert string representation of list to actual list
                             return literal_eval(val)
                         except Exception:
                             return None
@@ -226,14 +232,13 @@ if uploaded:
             # --- END: DATA FLATTENING LOGIC ---
 
             st.success(f"Completed. Rows processed: {total}. Output rows: {len(out_rows)}.")
-            # Updated: Changed use_container_width=True to width='stretch'
             st.dataframe(clean_df.head(50), width="stretch")
 
             # Download CSV (using the clean DataFrame)
             csv_bytes = clean_df.to_csv(index=False).encode("utf-8")
             st.download_button("Download CSV (Flattened)", data=csv_bytes, file_name="pdl_enriched_flattened.csv", mime="text/csv")
 
-            # ADDED: Download Excel button
+            # Download Excel (Flattened)
             excel_buffer = io.BytesIO()
             clean_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
             st.download_button(
@@ -243,7 +248,7 @@ if uploaded:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # Optional: provide full JSON for advanced work (uses the original out_rows with raw data)
+            # Optional: provide full JSON for raw data
             raw_json = json.dumps(out_rows, indent=2, ensure_ascii=False)
             st.download_button(
                 "Download JSON (includes _raw)",
