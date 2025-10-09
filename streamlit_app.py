@@ -3,14 +3,12 @@ import json
 import math
 import os
 from typing import List, Dict
-from ast import literal_eval # ADDED: For safely parsing string representations of lists
+from ast import literal_eval # For safely parsing string representations of lists
 
 import pandas as pd
 import streamlit as st
-import xlsxwriter # Added implicitly by pandas.to_excel, but good practice if explicitly using io.BytesIO
 
 # Assuming these files are in your project structure
-# You must have field_config.py and pdl_client.py available.
 from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
 from pdl_client import PDLClient
 
@@ -79,7 +77,6 @@ if uploaded:
         df = pd.read_excel(uploaded)
 
     st.subheader("Preview")
-    # FIX: Use width='stretch' to avoid deprecation warning
     st.dataframe(df.head(20), width="stretch")
 
     if df.empty:
@@ -100,7 +97,6 @@ if uploaded:
 
     # ---- Output field selection
     st.subheader("Select output fields to include")
-    # Ensuring required fields for flattening are in default
     default_fields = ["full_name", "emails", "phone_numbers", "linkedin_url"]
     presets = st.multiselect(
         "Quick-pick common fields",
@@ -141,7 +137,11 @@ if uploaded:
                 else:
                     if pd.notna(val):
                         # Ensure value is compatible with JSON/API, e.g., convert numpy types
-                        params[pdl_param] = val.item() if isinstance(val, (pd.np.integer, pd.np.floating)) else val
+                        # Using pd.np is deprecated; checking for direct float/int is safer here
+                        if isinstance(val, (int, float)):
+                             params[pdl_param] = val
+                        else:
+                            params[pdl_param] = val
             if requested_fields:
                 params["fields"] = requested_fields
             return {"params": params}
@@ -164,7 +164,7 @@ if uploaded:
                 progress.progress(min(1.0, (i + 1) / num_batches))
                 continue
 
-            # FIX: Ensure responses are correctly extracted to a list, regardless of PDL response format.
+            # Ensure responses are correctly extracted to a list, regardless of PDL response format.
             if isinstance(payload, list):
                 responses = payload
             elif isinstance(payload, dict) and "responses" in payload:
@@ -199,7 +199,6 @@ if uploaded:
             progress.progress(min(1.0, (i + 1) / num_batches))
 
         # ---- Post-processing output
-        # FIX: Indentation corrected to be consistent with the outer `if st.button` block.
         if out_rows:
             out_df = pd.DataFrame(out_rows)
 
@@ -207,11 +206,10 @@ if uploaded:
             
             # Check if emails were requested and flatten if present
             if 'emails' in out_df.columns:
-                # Safely parse strings to list-of-dicts if needed (important for loading saved data)
+                # Safely parse strings to list-of-dicts if needed
                 def _maybe_parse(val):
                     if isinstance(val, str) and val.strip().startswith('[') and val.strip().endswith(']'):
                         try:
-                            # Use literal_eval to safely convert string representation of list to actual list
                             return literal_eval(val)
                         except Exception:
                             return None
@@ -240,6 +238,7 @@ if uploaded:
 
             # Download Excel (Flattened)
             excel_buffer = io.BytesIO()
+            # Ensure 'xlsxwriter' is available in your environment's requirements.txt
             clean_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
             st.download_button(
                 label="Download Excel (Flattened)", 
