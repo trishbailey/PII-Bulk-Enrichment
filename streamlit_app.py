@@ -3,14 +3,56 @@ import json
 import math
 import os
 from typing import List, Dict
+from ast import literal_eval # ADDED: For safely parsing string representations of lists
 
 import pandas as pd
 import streamlit as st
 
+# Assuming these files are in your project structure
 from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
 from pdl_client import PDLClient
 
-# ---- Page config
+# -----------------------------------------------------------------------------
+# Utility Functions for Data Cleaning (ADDED)
+# -----------------------------------------------------------------------------
+
+def join_all_emails(emails: List[Dict]) -> str | None:
+    """Flattens a list of email dictionaries (from PDL) into a single, semicolon-separated string."""
+    if not isinstance(emails, list):
+        return None
+    
+    # Extract 'address' from each dictionary, filtering out non-dict items
+    addrs = [e.get('address') for e in emails if isinstance(e, dict) and e.get('address')]
+    
+    # Dedupe while preserving order
+    seen = set()
+    out = []
+    for a in addrs:
+        if a not in seen:
+            seen.add(a)
+            out.append(a)
+            
+    return "; ".join(out) if out else None
+
+
+def join_all_phones(phones: List[str]) -> str | None:
+    """Flattens a list of phone numbers (from PDL) into a single, semicolon-separated string."""
+    if not isinstance(phones, list):
+        return None
+    
+    # Dedupe strings while preserving order
+    seen = set()
+    out = []
+    for p in phones:
+        if isinstance(p, str) and p not in seen:
+            seen.add(p)
+            out.append(p)
+            
+    return "; ".join(out) if out else None
+
+# -----------------------------------------------------------------------------
+# Page config
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="PDL Bulk Enrichment", page_icon="🧭", layout="wide")
 
 st.title("People Data Labs — Bulk Person Enrichment")
@@ -35,6 +77,7 @@ if uploaded:
         df = pd.read_excel(uploaded)
 
     st.subheader("Preview")
+    # Updated: Changed use_container_width=True to width='stretch' to avoid future deprecation warning
     st.dataframe(df.head(20), width="stretch")
 
     if df.empty:
@@ -55,10 +98,12 @@ if uploaded:
 
     # ---- Output field selection
     st.subheader("Select output fields to include")
+    # Ensuring required fields for flattening are in default
+    default_fields = ["full_name", "emails", "phone_numbers", "linkedin_url"]
     presets = st.multiselect(
         "Quick-pick common fields",
         COMMON_OUTPUT_FIELDS,
-        default=["full_name", "emails", "phone_numbers", "linkedin_url"],
+        default=default_fields,
     )
     freeform = st.text_input("Add additional field names (comma-separated)", value="")
     requested_fields = list(dict.fromkeys([*presets, *[f.strip() for f in freeform.split(",") if f.strip()]]))
@@ -114,7 +159,8 @@ if uploaded:
                 progress.progress(min(1.0, (i + 1) / num_batches))
                 continue
 
-            # Handle both list and dict response formats
+            # FIX: Ensure responses are correctly extracted to a list, regardless of format.
+            # This directly addresses the 'list' object has no attribute 'get' error.
             if isinstance(payload, list):
                 responses = payload
             elif isinstance(payload, dict) and "responses" in payload:
@@ -124,7 +170,9 @@ if uploaded:
                 responses = []
 
             for item in responses:
+                # FIX: Use .get() safely, as 'item' is now definitely expected to be a dict
                 status = item.get("status")
+                # Ensure data is a dictionary before trying to access keys
                 data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
                 out = {"status": status}
 
@@ -149,17 +197,58 @@ if uploaded:
         # ---- Post-processing output
         if out_rows:
             out_df = pd.DataFrame(out_rows)
+
+            # --- START: DATA FLATTENING LOGIC (FIX/ADDITION) ---
+            
+            # Check if emails were requested and flatten if present
+            if 'emails' in out_df.columns:
+                # Safely parse strings to list-of-dicts if needed
+                def _maybe_parse(val):
+                    if isinstance(val, str) and val.strip().startswith('[') and val.strip().endswith(']'):
+                        try:
+                            return literal_eval(val)
+                        except Exception:
+                            return None
+                    return val
+
+                out_df['emails'] = out_df['emails'].apply(_maybe_parse)
+                out_df['emails_all'] = out_df['emails'].apply(join_all_emails).astype('string')
+                out_df = out_df.drop(columns=['emails'])
+
+            # Check if phone_numbers were requested and flatten if present
+            if 'phone_numbers' in out_df.columns:
+                out_df['phone_numbers_all'] = out_df['phone_numbers'].apply(join_all_phones).astype('string')
+                out_df = out_df.drop(columns=['phone_numbers'])
+            
+            # DataFrame for display and download (excluding the raw JSON column)
+            clean_df = out_df.drop(columns=["_raw"], errors="ignore")
+
+            # --- END: DATA FLATTENING LOGIC ---
+
             st.success(f"Completed. Rows processed: {total}. Output rows: {len(out_rows)}.")
-            st.dataframe(out_df.head(50), width="stretch")
+            # Updated: Changed use_container_width=True to width='stretch'
+            st.dataframe(clean_df.head(50), width="stretch")
 
-            csv_bytes = out_df.drop(columns=["_raw"], errors="ignore").to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV", data=csv_bytes, file_name="pdl_enriched.csv", mime="text/csv")
+            # Download CSV (using the clean DataFrame)
+            csv_bytes = clean_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download CSV (Flattened)", data=csv_bytes, file_name="pdl_enriched_flattened.csv", mime="text/csv")
 
+            # ADDED: Download Excel button
+            excel_buffer = io.BytesIO()
+            clean_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
+            st.download_button(
+                label="Download Excel (Flattened)", 
+                data=excel_buffer.getvalue(), 
+                file_name="pdl_enriched_flattened.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            # Optional: provide full JSON for advanced work (uses the original out_rows with raw data)
             raw_json = json.dumps(out_rows, indent=2, ensure_ascii=False)
             st.download_button(
                 "Download JSON (includes _raw)",
                 data=raw_json.encode("utf-8"),
-                file_name="pdl_enriched.json",
+                file_name="pdl_enriched_raw.json",
                 mime="application/json",
             )
         else:
