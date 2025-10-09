@@ -3,56 +3,14 @@ import json
 import math
 import os
 from typing import List, Dict
-from ast import literal_eval # ADDED: Required for parsing string representations of lists
 
 import pandas as pd
 import streamlit as st
 
-# Assuming these files are in your project structure
 from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
 from pdl_client import PDLClient
 
-# -----------------------------------------------------------------------------
-# Utility Functions for Data Cleaning
-# -----------------------------------------------------------------------------
-
-def join_all_emails(emails: List[Dict]) -> str | None:
-    """Flattens a list of email dictionaries (from PDL) into a single, semicolon-separated string."""
-    if not isinstance(emails, list):
-        return None
-    
-    # Extract 'address' from each dictionary, filtering out non-dict items
-    addrs = [e.get('address') for e in emails if isinstance(e, dict) and e.get('address')]
-    
-    # Dedupe while preserving order
-    seen = set()
-    out = []
-    for a in addrs:
-        if a not in seen:
-            seen.add(a)
-            out.append(a)
-            
-    return "; ".join(out) if out else None
-
-
-def join_all_phones(phones: List[str]) -> str | None:
-    """Flattens a list of phone numbers (from PDL) into a single, semicolon-separated string."""
-    if not isinstance(phones, list):
-        return None
-    
-    # Dedupe strings while preserving order
-    seen = set()
-    out = []
-    for p in phones:
-        if isinstance(p, str) and p not in seen:
-            seen.add(p)
-            out.append(p)
-            
-    return "; ".join(out) if out else None
-
-# -----------------------------------------------------------------------------
-# Page config
-# -----------------------------------------------------------------------------
+# ---- Page config
 st.set_page_config(page_title="PDL Bulk Enrichment", page_icon="🧭", layout="wide")
 
 st.title("People Data Labs — Bulk Person Enrichment")
@@ -77,7 +35,7 @@ if uploaded:
         df = pd.read_excel(uploaded)
 
     st.subheader("Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+    st.dataframe(df.head(20), width="stretch")
 
     if df.empty:
         st.warning("Your file appears to be empty.")
@@ -87,7 +45,6 @@ if uploaded:
     st.subheader("Map your columns → PDL input params")
     st.write("Only the parameters you map will be sent for each record. (Unmapped are ignored.)")
 
-    # Build selectors for each PDL param; users can leave unmapped.
     colmap: Dict[str, str] = {}
     with st.expander("Mapping", expanded=True):
         for p in PDL_INPUT_PARAMS:
@@ -98,9 +55,11 @@ if uploaded:
 
     # ---- Output field selection
     st.subheader("Select output fields to include")
-    # Added 'emails' and 'phone_numbers' to default list to ensure they are available for flattening
-    default_fields = ["full_name","emails","phone_numbers","linkedin_url"]
-    presets = st.multiselect("Quick-pick common fields", COMMON_OUTPUT_FIELDS, default=default_fields)
+    presets = st.multiselect(
+        "Quick-pick common fields",
+        COMMON_OUTPUT_FIELDS,
+        default=["full_name", "emails", "phone_numbers", "linkedin_url"],
+    )
     freeform = st.text_input("Add additional field names (comma-separated)", value="")
     requested_fields = list(dict.fromkeys([*presets, *[f.strip() for f in freeform.split(",") if f.strip()]]))
 
@@ -128,24 +87,21 @@ if uploaded:
             params = {}
             for pdl_param, colname in colmap.items():
                 val = row.get(colname)
-                # Handle list fields (e.g., profiles) if comma-separated in the file
                 if pdl_param == "profiles" and isinstance(val, str):
                     params[pdl_param] = [v.strip() for v in val.split(",") if v.strip()]
                 else:
                     if pd.notna(val):
                         params[pdl_param] = val
-            # restrict fields to only what user asked (if any)
             if requested_fields:
                 params["fields"] = requested_fields
             return {"params": params}
 
-        # Build all requests
         request_objs = [row_to_params(row) for _, row in work_df.iterrows()]
 
-        # Process in batches
+        # ---- Process in batches
         num_batches = math.ceil(len(request_objs) / batch_size)
         out_rows = []
-        
+
         for i in range(num_batches):
             start = i * batch_size
             end = min(start + batch_size, len(request_objs))
@@ -158,7 +114,7 @@ if uploaded:
                 progress.progress(min(1.0, (i + 1) / num_batches))
                 continue
 
-            # Handle both response formats:
+            # Handle both list and dict response formats
             if isinstance(payload, list):
                 responses = payload
             elif isinstance(payload, dict) and "responses" in payload:
@@ -169,15 +125,12 @@ if uploaded:
 
             for item in responses:
                 status = item.get("status")
-                # Ensure data is a dictionary before trying to access keys
                 data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
                 out = {"status": status}
 
-                # Flatten selected fields from the returned profile data
                 for f in requested_fields:
                     out[f] = data.get(f)
 
-                # Optionally extract job info if requested
                 job = data.get("job", {}) or {}
                 if "job_title" in requested_fields:
                     out["job_title"] = job.get("title")
@@ -188,74 +141,27 @@ if uploaded:
                     company = job.get("company", {}) or {}
                     out["job_company_website"] = company.get("website")
 
-                # Keep raw data for JSON download
                 out["_raw"] = data
                 out_rows.append(out)
 
             progress.progress(min(1.0, (i + 1) / num_batches))
-        
-        # ---------------------------------------------------------------------
-        # Output results logic
-        # ---------------------------------------------------------------------
-        
+
+        # ---- Post-processing output
         if out_rows:
             out_df = pd.DataFrame(out_rows)
-
-            # -----------------------------------------------------------------
-            # START: CRITICAL CORRECTION - FLATTEN EMAILS AND PHONES
-            # -----------------------------------------------------------------
-            # Only apply if the columns were requested and exist in the output
-            if 'emails' in out_df.columns:
-                # 1. Check if 'emails' is a string representation (from a prior export/reload). 
-                # This step is often not needed in in-memory enrichment, but good for robustness.
-                def _maybe_parse(val):
-                    if isinstance(val, str) and val.strip().startswith('[') and val.strip().endswith(']'):
-                        try:
-                            # Use literal_eval to safely convert string list-of-dicts to actual list-of-dicts
-                            return literal_eval(val)
-                        except Exception:
-                            return None
-                    return val
-
-                out_df['emails'] = out_df['emails'].apply(_maybe_parse)
-                
-                # 2. Flatten the list-of-dicts into the desired clean string
-                out_df['emails_all'] = out_df['emails'].apply(join_all_emails).astype('string')
-                out_df = out_df.drop(columns=['emails'])
-
-            if 'phone_numbers' in out_df.columns:
-                # Phone numbers often come back as a list of strings, so simple join works best.
-                out_df['phone_numbers_all'] = out_df['phone_numbers'].apply(join_all_phones).astype('string')
-                out_df = out_df.drop(columns=['phone_numbers'])
-            
-            # Identify columns to drop from the final clean CSV/Excel output (keep only the raw JSON)
-            clean_df = out_df.drop(columns=["_raw"], errors="ignore")
-            # -----------------------------------------------------------------
-            # END: CRITICAL CORRECTION
-            # -----------------------------------------------------------------
-
-
             st.success(f"Completed. Rows processed: {total}. Output rows: {len(out_rows)}.")
-            st.dataframe(clean_df.head(50), use_container_width=True)
+            st.dataframe(out_df.head(50), width="stretch")
 
-            # Download CSV (using the clean DataFrame)
-            csv_bytes = clean_df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV (Flattened)", data=csv_bytes, file_name="pdl_enriched_flattened.csv", mime="text/csv")
-            
-            # Download Excel (using the clean DataFrame)
-            excel_buffer = io.BytesIO()
-            clean_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
-            st.download_button(
-                label="Download Excel (Flattened)", 
-                data=excel_buffer.getvalue(), 
-                file_name="pdl_enriched_flattened.xlsx", 
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            csv_bytes = out_df.drop(columns=["_raw"], errors="ignore").to_csv(index=False).encode("utf-8")
+            st.download_button("Download CSV", data=csv_bytes, file_name="pdl_enriched.csv", mime="text/csv")
 
-            # Optional: provide full JSON for advanced work (uses the original out_rows with raw data)
             raw_json = json.dumps(out_rows, indent=2, ensure_ascii=False)
-            st.download_button("Download JSON (includes _raw)", data=raw_json.encode("utf-8"),
-                               file_name="pdl_enriched_raw.json", mime="application/json")
+            st.download_button(
+                "Download JSON (includes _raw)",
+                data=raw_json.encode("utf-8"),
+                file_name="pdl_enriched.json",
+                mime="application/json",
+            )
         else:
             st.warning("No results returned.")
 
