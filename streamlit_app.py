@@ -88,8 +88,8 @@ with col1:
 				df_preview = pd.read_excel(uploaded_file)
 			row_count = len(df_preview)
 			input_cols = list(df_preview.columns)
-			col_list = '\n'.join([f"- {col}" for col in input_cols])
-			st.success(f"File Upload Successful 🎉\n{row_count} rows detected\nColumns:\n{col_list}")
+			col_list = '<br>'.join([f"- {col}" for col in input_cols])
+			st.success(f"File Upload Successful 🎉<br>{row_count} rows detected<br>Columns:<br>{col_list}", icon="✅")
 		except Exception as e:
 			st.error(f"File upload failed: {str(e)}")
 	st.markdown("</div>", unsafe_allow_html=True)
