@@ -19,27 +19,25 @@ PDL_INPUT_PARAMS = [
     "phone",
     "profile",        # single social url
     "profiles",       # list of social urls
+    "social_media_3", # Social Media Account 3
 ]
 
 # Helpful preset output fields users often want back.
 # (You can free-type field names in the UI too; these are just shortcuts.)
 COMMON_OUTPUT_FIELDS = [
-    "full_name",
-    "gender",
-    "birth_year",
-    "emails",
-    "phone_numbers",
-    "linkedin_url",
-    "twitter_url",
-    "github_url",
-    "facebook_url",
-    "profiles",       # entire profiles array
-    "location_name",
-    "industry",
-    "job_title",
-    "job_company_name",
-    "job_company_website",
-    "job_start_date",
-    "job_last_updated",
+    "Full Name",
+    "Birth Year",
+    "Emails",
+    "Phone Numbers",
+    "LinkedIn URL",
+    "Facebook URL",
+    "GitHub URL",
+    "Other Social Media",
+    "Street Address",
+    "City or Town",
+    "State",
+    "ZIP Code",
+    "Job Title",
+    "Company or Employer",
 ]
 

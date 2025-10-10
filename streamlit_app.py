@@ -1,271 +1,185 @@
-import io
-import json
-import math
-import os
-from typing import List, Dict
-from ast import literal_eval # For safely parsing string representations of lists
-
-import pandas as pd
 import streamlit as st
-
-# Assuming these files are in your project structure
-from field_config import PDL_INPUT_PARAMS, COMMON_OUTPUT_FIELDS
+st.set_page_config(layout="wide")
+import pandas as pd
 from pdl_client import PDLClient
+import os
+import streamlit as st
+st.set_page_config(layout="wide")
+import pandas as pd
+from pdl_client import PDLClient
+import os
 
-# -----------------------------------------------------------------------------
-# Utility Functions for Data Cleaning
-# -----------------------------------------------------------------------------
-
-def join_all_emails(emails: List[Dict]) -> str | None:
-    """Flattens a list of email dictionaries (from PDL) into a single, semicolon-separated string."""
-    if not isinstance(emails, list):
-        return None
-    
-    # Extract 'address' from each dictionary, filtering out non-dict items
-    addrs = [e.get('address') for e in emails if isinstance(e, dict) and e.get('address')]
-    
-    # Dedupe while preserving order
-    seen = set()
-    out = []
-    for a in addrs:
-        if a not in seen:
-            seen.add(a)
-            out.append(a)
-            
-    return "; ".join(out) if out else None
-
-
-def join_all_phones(phones: List[str]) -> str | None:
-    """Flattens a list of phone numbers (from PDL) into a single, semicolon-separated string."""
-    if not isinstance(phones, list):
-        return None
-    
-    # Dedupe strings while preserving order
-    seen = set()
-    out = []
-    for p in phones:
-        if isinstance(p, str) and p not in seen:
-            seen.add(p)
-            out.append(p)
-            
-    return "; ".join(out) if out else None
-
-# -----------------------------------------------------------------------------
-# Page config
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="PDL Bulk Enrichment", page_icon="🧭", layout="wide")
-
-st.title("People Data Labs — Bulk Person Enrichment")
-st.caption("Upload a CSV/XLSX, map your columns to PDL inputs, select output fields, and enrich in batches.")
-
-# ---- API key
 api_key = st.secrets.get("PDL_API_KEY") or os.getenv("PDL_API_KEY")
 if not api_key:
-    st.error("No PDL API key found. Add `PDL_API_KEY` to Streamlit Secrets or environment.")
-    st.stop()
+	st.error("No PDL API key found. Add `PDL_API_KEY` to Streamlit Secrets or environment.")
+	st.stop()
+st.markdown("""
+<style>
+/* Reduce top margin above app title */
+h1 {
+	margin-top: 12px !important;
+}
+/* Darker blue boxes with white header text */
+/* Remove blue background from step boxes */
+.upload-box, .middle-box, .right-box {
+	background: none;
+	border-radius: 0;
+	padding: 0;
+	margin-bottom: 0;
+}
+/* Stylish pill-shaped background for step titles */
+.step-pill {
+	display: inline-block;
+	background: linear-gradient(90deg, #4F8BF9 0%, #6FC3F7 100%);
+	color: #fff;
+				font-size: 1.06rem;
+	font-weight: 700;
+	padding: 16px 40px;
+	border-radius: 32px;
+	margin-bottom: 24px;
+	box-shadow: 0 2px 8px rgba(79,139,249,0.10);
+}
+div[data-testid="stFileUploader"] button {
+color: #333 !important;
+font-weight: normal !important;
+border-radius: 8px !important;
+border: 1px solid #ddd !important;
+background: transparent !important;
+box-shadow: none !important;
+}
+/* Make Run enrichment button gray to match Browse Files */
+div.right-box button {
+	background-color: #f5f5f5 !important;
+	color: #333 !important;
+	font-weight: normal !important;
+	border-radius: 8px !important;
+	border: 1px solid #ddd !important;
+	box-shadow: none !important;
+}
+/* Hide Streamlit file uploader help text and drag-and-drop area */
+div[data-testid="stFileUploader"] div:nth-child(2),
+div[data-testid="stFileUploader"] .uploadedFileInfo,
+div[data-testid="stFileUploader"] .drag-and-drop-area {
+display: none !important;
+}
 
-# NOTE: The PDLClient (pdl_client.py) must be using the Sandbox URL for free testing.
+""", unsafe_allow_html=True)
+
+st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>PII Bulk Enrichment Tool</h1>", unsafe_allow_html=True)
+
 client = PDLClient(api_key)
 
-# ---- File upload
-uploaded = st.file_uploader("Upload .csv or .xlsx", type=["csv", "xlsx"])
 
-if uploaded:
-    # Read file safely
-    if uploaded.name.lower().endswith(".csv"):
-        df = pd.read_csv(uploaded)
-    else:
-        df = pd.read_excel(uploaded)
+col1, col2, col3, col4 = st.columns([1.7, 2.1, 2.1, 1.7])
 
-    st.subheader("Preview")
-    st.dataframe(df.head(20), width="stretch")
+selected_inputs = []
+selected_outputs = []
 
-    if df.empty:
-        st.warning("Your file appears to be empty.")
-        st.stop()
+with col1:
+	st.markdown("<div class='upload-box'>", unsafe_allow_html=True)
+	st.markdown("<div class='step-pill'>Step 1: Upload</div>", unsafe_allow_html=True)
+	uploaded_file = st.file_uploader("Upload your CSV or Excel file (max 100 rows)", type=["csv", "xlsx"])
+	st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Column mapping UI
-    st.subheader("Map your columns → PDL input params")
-    st.write("Only the parameters you map will be sent for each record. (Unmapped are ignored.)")
+with col2:
+	st.markdown("<div class='middle-box'>", unsafe_allow_html=True)
+	st.markdown("<div class='step-pill'>Step 2: Select Inputs</div>", unsafe_allow_html=True)
+	st.markdown("<small style='color: #000;'>Check all columns present in your uploaded file.</small>", unsafe_allow_html=True)
+	input_categories = [
+		"First and last name together",
+		"First Name",
+		"Last Name",
+		"Middle Name",
+		"Location",
+		"Street Address",
+		"City or Town",
+		"State",
+		"ZIP Code",
+		"Company or Employer",
+		"Job Title",
+		"Email",
+		"Phone Number",
+		"Social Media Account 1",
+		"Social Media Account 2",
+		"Social Media Account 3"
+	]
+	cols_in = st.columns(1)
+	for cat in input_categories:
+		if st.checkbox(cat, key=f"in_{cat}"):
+			selected_inputs.append(cat)
+	st.markdown("</div>", unsafe_allow_html=True)
 
-    colmap: Dict[str, str] = {}
-    with st.expander("Mapping", expanded=True):
-        for p in PDL_INPUT_PARAMS:
-            options = ["(none)"] + list(df.columns)
-            sel = st.selectbox(f"{p}", options, index=0, key=f"map_{p}")
-            if sel != "(none)":
-                colmap[p] = sel
+with col3:
+	st.markdown("<div class='middle-box'>", unsafe_allow_html=True)
+	st.markdown("<div class='step-pill'>Step 3: Select Outputs</div>", unsafe_allow_html=True)
+	st.markdown("<small style='color: #000;'>Check all output fields you want to receive from enrichment.</small>", unsafe_allow_html=True)
+	output_fields = [
+		"Full Name",
+		"Birth Year",
+		"Emails",
+		"Phone Numbers",
+		"LinkedIn URL",
+		"Facebook URL",
+		"GitHub URL",
+		"Other Social Media",
+		"Street Address",
+		"City or Town",
+		"State",
+		"ZIP Code",
+		"Job Title",
+		"Company or Employer"
+	]
+	cols_out = st.columns(1)
+	for field in output_fields:
+		if st.checkbox(field, key=f"out_{field}"):
+			selected_outputs.append(field)
+	st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Output field selection
-    st.subheader("Select output fields to include")
-    default_fields = ["full_name", "emails", "phone_numbers", "linkedin_url"]
-    presets = st.multiselect(
-        "Quick-pick common fields",
-        COMMON_OUTPUT_FIELDS,
-        default=default_fields,
-    )
-    freeform = st.text_input("Add additional field names (comma-separated)", value="")
-    requested_fields = list(dict.fromkeys([*presets, *[f.strip() for f in freeform.split(",") if f.strip()]]))
+with col4:
+	st.markdown("<div class='right-box'>", unsafe_allow_html=True)
+	st.markdown("<div class='step-pill'>Step 4: Enrich</div>", unsafe_allow_html=True)
+	st.markdown("<small style='color: #000;'>Click to run enrichment and download results.</small>", unsafe_allow_html=True)
+	run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
+	st.markdown("</div>", unsafe_allow_html=True)
 
-    st.caption("Tip: You can return full objects like `profiles` or specific fields like `linkedin_url`.")
 
-    # ---- Batching controls
-    st.subheader("Batching & execution")
-    batch_size = st.number_input("Batch size (max 100)", min_value=1, max_value=100, value=100, step=1)
-    max_rows = st.number_input("Limit number of rows to process (0 = all)", min_value=0, value=0, step=1)
 
-    # ---- Start enrichment
-    if st.button("Run enrichment"):
-        work_df = df if max_rows == 0 else df.head(int(max_rows))
-        total = len(work_df)
-        if total == 0:
-            st.warning("Nothing to process.")
-            st.stop()
+if uploaded_file:
+	if uploaded_file.name.endswith(".csv"):
+		df = pd.read_csv(uploaded_file)
+	else:
+		df = pd.read_excel(uploaded_file)
+	df = df.head(100)  # Limit to 100 rows
 
-        progress = st.progress(0)
-        results: List[dict] = []
-        errors: List[dict] = []
+	if run_enrich:
+		with st.spinner("Enriching data. Please wait..."):
+			results = []
+			for _, row in df.iterrows():
+				params = {}
+				for field in selected_inputs:
+					if field in df.columns:
+						val = row[field]
+						if pd.notna(val):
+							params[field] = val
+				if selected_outputs:
+					params["fields"] = selected_outputs
+				try:
+					response = client.person_enrich(params)
+					results.append(response.get("data", {}))
+				except Exception as e:
+					results.append({"error": str(e)})
+			results_df = pd.DataFrame(results)
+			st.success(f"Enrichment completed for {len(results_df)} rows.")
+			st.dataframe(results_df)
+			csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+			st.download_button("Download Enriched CSV", data=csv_bytes, file_name="enriched_results.csv", mime="text/csv")
 
-        # Build requests payloads in batches
-        def row_to_params(row) -> dict:
-            params = {}
-            for pdl_param, colname in colmap.items():
-                val = row.get(colname)
-                # Handles profiles as a comma-separated string that needs to be converted to a list
-                if pdl_param == "profiles" and isinstance(val, str):
-                    params[pdl_param] = [v.strip() for v in val.split(",") if v.strip()]
-                # Handles all other parameters, skipping NaNs
-                else:
-                    if pd.notna(val):
-                        # Ensure value is compatible with JSON/API, e.g., convert numpy types
-                        # Using pd.np is deprecated; checking for direct float/int is safer here
-                        if isinstance(val, (int, float)):
-                            params[pdl_param] = val # CORRECTED INDENTATION HERE
-                        else:
-                            params[pdl_param] = val
-                            
-            if requested_fields:
-                params["fields"] = requested_fields
-            return {"params": params}
+			import io
+			import pandas as pd
+			excel_buffer = io.BytesIO()
+			results_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
+			excel_bytes = excel_buffer.getvalue()
+			st.download_button("Download Enriched Excel", data=excel_bytes, file_name="enriched_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        request_objs = [row_to_params(row) for _, row in work_df.iterrows()]
 
-        # ---- Process in batches
-        num_batches = math.ceil(len(request_objs) / batch_size)
-        out_rows = []
 
-        for i in range(num_batches):
-            start = i * batch_size
-            end = min(start + batch_size, len(request_objs))
-            batch = request_objs[start:end]
-
-            try:
-                payload = client.bulk_enrich(batch)
-            except Exception as e:
-                errors.append({"batch_index": i, "error": str(e)})
-                progress.progress(min(1.0, (i + 1) / num_batches))
-                continue
-
-            # Robustly extract responses from the payload
-            if isinstance(payload, list):
-                responses = payload
-            elif isinstance(payload, dict) and "responses" in payload:
-                responses = payload["responses"]
-            else:
-                st.warning(f"Unexpected response format for batch {i}: {type(payload)}")
-                responses = []
-
-            for item in responses:
-                status = item.get("status")
-                # Ensure data is a dictionary before trying to access keys
-                data = item.get("data", {}) if isinstance(item.get("data", {}), dict) else {}
-                out = {"status": status}
-
-                for f in requested_fields:
-                    out[f] = data.get(f)
-
-                # --- CORRECTED JOB EXTRACTION LOGIC ---
-                # PDL enrichment returns experience as a list. Use the first item for current job info.
-                if any(f.startswith("job_") for f in requested_fields):
-                    experience = data.get("experience", [])
-                    primary_job = experience[0] if experience and isinstance(experience[0], dict) else {}
-                    primary_company = primary_job.get("company", {})
-
-                    if "job_title" in requested_fields:
-                        out["job_title"] = primary_job.get("title")
-
-                    if "job_company_name" in requested_fields:
-                        out["job_company_name"] = primary_company.get("name")
-
-                    if "job_company_website" in requested_fields:
-                        out["job_company_website"] = primary_company.get("website")
-                # --- END CORRECTED JOB EXTRACTION LOGIC ---
-
-                out["_raw"] = data
-                out_rows.append(out)
-
-            progress.progress(min(1.0, (i + 1) / num_batches))
-
-        # ---- Post-processing output
-        if out_rows:
-            out_df = pd.DataFrame(out_rows)
-
-            # --- START: DATA FLATTENING LOGIC (for clean output) ---
-            
-            # Check if emails were requested and flatten if present
-            if 'emails' in out_df.columns:
-                # Safely parse strings to list-of-dicts if needed
-                def _maybe_parse(val):
-                    if isinstance(val, str) and val.strip().startswith('[') and val.strip().endswith(']'):
-                        try:
-                            return literal_eval(val)
-                        except Exception:
-                            return None
-                    return val
-
-                out_df['emails'] = out_df['emails'].apply(_maybe_parse)
-                out_df['emails_all'] = out_df['emails'].apply(join_all_emails).astype('string')
-                out_df = out_df.drop(columns=['emails'])
-
-            # Check if phone_numbers were requested and flatten if present
-            if 'phone_numbers' in out_df.columns:
-                out_df['phone_numbers_all'] = out_df['phone_numbers'].apply(join_all_phones).astype('string')
-                out_df = out_df.drop(columns=['phone_numbers'])
-            
-            # DataFrame for display and download (excluding the raw JSON column)
-            clean_df = out_df.drop(columns=["_raw"], errors="ignore")
-
-            # --- END: DATA FLATTENING LOGIC ---
-
-            st.success(f"Completed. Rows processed: {total}. Output rows: {len(out_rows)}.")
-            st.dataframe(clean_df.head(50), width="stretch")
-
-            # Download CSV (using the clean DataFrame)
-            csv_bytes = clean_df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV (Flattened)", data=csv_bytes, file_name="pdl_enriched_flattened.csv", mime="text/csv")
-
-            # Download Excel (Flattened)
-            excel_buffer = io.BytesIO()
-            # Ensure 'xlsxwriter' is available in your environment's requirements.txt
-            clean_df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
-            st.download_button(
-                label="Download Excel (Flattened)", 
-                data=excel_buffer.getvalue(), 
-                file_name="pdl_enriched_flattened.xlsx", 
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-            # Optional: provide full JSON for raw data
-            raw_json = json.dumps(out_rows, indent=2, ensure_ascii=False)
-            st.download_button(
-                "Download JSON (includes _raw)",
-                data=raw_json.encode("utf-8"),
-                file_name="pdl_enriched_raw.json",
-                mime="application/json",
-            )
-        else:
-            st.warning("No results returned.")
-
-        if errors:
-            with st.expander("Errors", expanded=False):
-                st.write(pd.DataFrame(errors))
