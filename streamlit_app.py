@@ -66,7 +66,7 @@ display: none !important;
 
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>PII Bulk Enrichment Tool</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>Get Contact Info</h1>", unsafe_allow_html=True)
 
 client = PDLClient(api_key)
 
