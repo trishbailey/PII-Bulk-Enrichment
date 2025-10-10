@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit_confetti as stc
 st.set_page_config(layout="wide")
 import pandas as pd
 from pdl_client import PDLClient
@@ -86,7 +87,7 @@ with col1:
 			df_preview = pd.read_excel(uploaded_file)
 		row_count = len(df_preview)
 		input_cols = list(df_preview.columns)
-		st.success(f"File Upload Successful: {row_count} rows detected. Columns: {', '.join(input_cols)}")
+	st.success(f"File Upload Successful 🎉: {row_count} rows detected. Columns: {', '.join(input_cols)}")
 	st.markdown("</div>", unsafe_allow_html=True)
 
 with col2:
@@ -177,7 +178,8 @@ if uploaded_file:
 				except Exception as e:
 					results.append({"error": str(e)})
 			results_df = pd.DataFrame(results)
-			st.success(f"Enrichment completed for {len(results_df)} rows.")
+			st.success(f"Enrichment completed for {len(results_df)} rows!")
+			stc.confetti()
 			st.dataframe(results_df)
 			csv_bytes = results_df.to_csv(index=False).encode("utf-8")
 			st.download_button("Download Enriched CSV", data=csv_bytes, file_name="enriched_results.csv", mime="text/csv")
