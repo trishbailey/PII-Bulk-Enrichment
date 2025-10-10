@@ -79,6 +79,14 @@ with col1:
 	st.markdown("<div class='upload-box'>", unsafe_allow_html=True)
 	st.markdown("<div class='step-pill'>Step 1: Upload</div>", unsafe_allow_html=True)
 	uploaded_file = st.file_uploader("Upload your CSV or Excel file (max 100 rows)", type=["csv", "xlsx"])
+	if uploaded_file:
+		if uploaded_file.name.endswith(".csv"):
+			df_preview = pd.read_csv(uploaded_file)
+		else:
+			df_preview = pd.read_excel(uploaded_file)
+		row_count = len(df_preview)
+		input_cols = list(df_preview.columns)
+		st.success(f"File Upload Successful: {row_count} rows detected. Columns: {', '.join(input_cols)}")
 	st.markdown("</div>", unsafe_allow_html=True)
 
 with col2:
