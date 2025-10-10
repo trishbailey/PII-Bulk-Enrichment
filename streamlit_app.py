@@ -89,7 +89,14 @@ with col1:
 			row_count = len(df_preview)
 			input_cols = list(df_preview.columns)
 			col_list = '<br>'.join([f"- {col}" for col in input_cols])
-			st.success(f"File Upload Successful 🎉<br>{row_count} rows detected<br>Columns:<br>{col_list}", icon="✅")
+			st.markdown(f"""
+				<div style='background-color:#e6f4ea;padding:16px;border-radius:8px;border:1px solid #b7e4c7;'>
+					<span style='font-size:1.1rem;font-weight:600;color:#2e7d32;'>File Upload Successful 🎉</span><br>
+					<span style='color:#222;'>{row_count} rows detected</span><br>
+					<span style='color:#222;'>Columns:</span><br>
+					<span style='color:#222;'>{col_list}</span>
+				</div>
+			""", unsafe_allow_html=True)
 		except Exception as e:
 			st.error(f"File upload failed: {str(e)}")
 	st.markdown("</div>", unsafe_allow_html=True)
