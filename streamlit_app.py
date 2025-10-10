@@ -33,7 +33,7 @@ h1 {
 	display: inline-block;
 	background: linear-gradient(90deg, #4F8BF9 0%, #6FC3F7 100%);
 	color: #fff;
-				font-size: 1.06rem;
+                font-size: 1.38rem;
 	font-weight: 700;
 	padding: 16px 40px;
 	border-radius: 32px;
