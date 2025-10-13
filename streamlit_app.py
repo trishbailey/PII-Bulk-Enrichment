@@ -302,16 +302,12 @@ with col1:
     st.markdown("<div class='step-pill'>Step 1: Upload</div>", unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader("Upload your CSV or Excel file (max 100 rows)", type=["csv", "xlsx"])
-    random_sample = st.checkbox("Randomize which 100 rows are used", value=False, help="If checked, a random sample of up to 100 rows is used instead of the first 100.")
 
     if uploaded_file is not None:
         try:
             file_bytes = uploaded_file.getvalue()
             df_full = load_df_from_bytes(file_bytes, uploaded_file.name)
-            if random_sample and len(df_full) > 100:
-                df = df_full.sample(n=100, random_state=42).reset_index(drop=True)
-            else:
-                df = df_full.head(100).copy()
+            df = df_full.head(100).copy()
 
             st.session_state.df = df
             st.session_state.row_count = len(df)
