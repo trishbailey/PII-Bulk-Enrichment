@@ -530,9 +530,9 @@ if run_enrich:
             for idx, row in df_to_enrich.iterrows():
                 cleaned_row = {}
                 
-                # Add original input fields first
+                # Add original columns from the uploaded file (without prefix)
                 for col in df_to_enrich.columns:
-                    cleaned_row[f"Input_{col}"] = row[col]
+                    cleaned_row[col] = row[col]
                 
                 # Get the enrichment result for this row
                 enrichment = results_map.get(idx, {})
@@ -544,58 +544,73 @@ if run_enrich:
                     continue
                 
                 # Add enriched data with clean formatting
+                # Only add columns if they have data from PDL
+                
                 # Name fields
-                cleaned_row["Full_Name"] = enrichment.get("full_name", "")
-                cleaned_row["First_Name"] = enrichment.get("first_name", "")
-                cleaned_row["Last_Name"] = enrichment.get("last_name", "")
+                if enrichment.get("full_name"):
+                    cleaned_row["Full_Name"] = enrichment.get("full_name", "")
+                if enrichment.get("first_name"):
+                    cleaned_row["PDL_First_Name"] = enrichment.get("first_name", "")
+                if enrichment.get("last_name"):
+                    cleaned_row["PDL_Last_Name"] = enrichment.get("last_name", "")
                 
                 # Emails - join multiple emails with semicolon
                 emails = enrichment.get("emails", [])
-                if isinstance(emails, list):
+                if emails and isinstance(emails, list):
                     email_list = []
                     for email in emails:
                         if isinstance(email, dict) and "address" in email:
                             email_list.append(email["address"])
                         elif isinstance(email, str):
                             email_list.append(email)
-                    cleaned_row["Emails"] = "; ".join(email_list)
-                else:
-                    cleaned_row["Emails"] = str(emails) if emails else ""
+                    if email_list:
+                        cleaned_row["Emails"] = "; ".join(email_list)
                 
                 # Phone numbers - join multiple phones with semicolon
                 phones = enrichment.get("phone_numbers", [])
-                if isinstance(phones, list):
+                if phones and isinstance(phones, list):
                     phone_list = []
                     for phone in phones:
                         if isinstance(phone, dict) and "number" in phone:
                             phone_list.append(phone["number"])
                         elif isinstance(phone, str):
                             phone_list.append(phone)
-                    cleaned_row["Phone_Numbers"] = "; ".join(phone_list)
-                else:
-                    cleaned_row["Phone_Numbers"] = str(phones) if phones else ""
+                    if phone_list:
+                        cleaned_row["Phone_Numbers"] = "; ".join(phone_list)
                 
                 # Social profiles
-                cleaned_row["LinkedIn_URL"] = enrichment.get("linkedin_url", "")
-                cleaned_row["Facebook_URL"] = enrichment.get("facebook_url", "")
-                cleaned_row["GitHub_URL"] = enrichment.get("github_url", "")
+                if enrichment.get("linkedin_url"):
+                    cleaned_row["LinkedIn_URL"] = enrichment.get("linkedin_url", "")
+                if enrichment.get("facebook_url"):
+                    cleaned_row["Facebook_URL"] = enrichment.get("facebook_url", "")
+                if enrichment.get("github_url"):
+                    cleaned_row["GitHub_URL"] = enrichment.get("github_url", "")
                 
                 # Location data
-                cleaned_row["Street_Address"] = enrichment.get("location_street_address", "")
-                cleaned_row["City"] = enrichment.get("location_locality", "")
-                cleaned_row["State"] = enrichment.get("location_region", "")
-                cleaned_row["Postal_Code"] = enrichment.get("location_postal_code", "")
-                cleaned_row["Country"] = enrichment.get("location_country", "")
+                if enrichment.get("location_street_address"):
+                    cleaned_row["Street_Address"] = enrichment.get("location_street_address", "")
+                if enrichment.get("location_locality"):
+                    cleaned_row["City"] = enrichment.get("location_locality", "")
+                if enrichment.get("location_region"):
+                    cleaned_row["State"] = enrichment.get("location_region", "")
+                if enrichment.get("location_postal_code"):
+                    cleaned_row["Postal_Code"] = enrichment.get("location_postal_code", "")
+                if enrichment.get("location_country"):
+                    cleaned_row["Country"] = enrichment.get("location_country", "")
                 
                 # Work info
-                cleaned_row["Job_Title"] = enrichment.get("job_title", "")
-                cleaned_row["Company"] = enrichment.get("job_company_name", "")
+                if enrichment.get("job_title"):
+                    cleaned_row["Job_Title"] = enrichment.get("job_title", "")
+                if enrichment.get("job_company_name"):
+                    cleaned_row["Company"] = enrichment.get("job_company_name", "")
                 
                 # Birth date
-                cleaned_row["Birth_Date"] = enrichment.get("birth_date", "")
+                if enrichment.get("birth_date"):
+                    cleaned_row["Birth_Date"] = enrichment.get("birth_date", "")
                 
                 # Add likelihood score if available
-                cleaned_row["Match_Score"] = enrichment.get("likelihood", "")
+                if enrichment.get("likelihood"):
+                    cleaned_row["Match_Score"] = enrichment.get("likelihood", "")
                 
                 cleaned_df = pd.concat([cleaned_df, pd.DataFrame([cleaned_row])], ignore_index=True)
             
