@@ -249,12 +249,8 @@ if not api_key:
     st.error("No PDL API key found. Add PDL_API_KEY to Streamlit Secrets or environment.")
     st.stop()
 
-# Initialize PDL client with sandbox=True
-client = PDLPY(api_key=api_key, sandbox=True)
-
-# To switch to production (real data), change to:
-# client = PDLPY(api_key=api_key, sandbox=False)
-# WARNING: Production calls will be charged to your account!
+# Initialize PDL client - set sandbox=False for production
+client = PDLPY(api_key=api_key, sandbox=False)  # Production mode - charges apply!
 
 # ---------------------------
 # Styles
