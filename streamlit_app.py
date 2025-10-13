@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import streamlit as st
-import streamlit_confetti as stc
 from peopledatalabs import PDLPY
 
 # ---------------------------
