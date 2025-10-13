@@ -543,7 +543,14 @@ if run_enrich:
 
             results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
             st.success(f"Enrichment completed for {len(results_df)} rows!")
-            stc.confetti()
+            try:
+                stc.confetti()
+            except TypeError:
+                # Handle older/newer versions of streamlit-confetti
+                try:
+                    stc.confetti(emojis=['🎉', '🎊', '✨'])
+                except:
+                    pass  # Skip confetti if it fails
             st.dataframe(results_df, use_container_width=True)
 
             # Downloads
