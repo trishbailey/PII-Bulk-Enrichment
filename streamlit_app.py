@@ -539,30 +539,129 @@ if run_enrich:
 
             # Store results in session state for download buttons
             results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
-            st.session_state['results_df'] = results_df
+            
+            # Clean up the data for better Excel/CSV formatting
+            cleaned_df = pd.DataFrame()
+            
+            # Start with original input data
+            for idx, row in df_to_enrich.iterrows():
+                cleaned_row = {}
+                
+                # Add original input fields first
+                for col in df_to_enrich.columns:
+                    cleaned_row[f"Input_{col}"] = row[col]
+                
+                # Get the enrichment result for this row
+                enrichment = results_map.get(idx, {})
+                
+                # If there's an error, add error column and continue
+                if "error" in enrichment:
+                    cleaned_row["Error"] = enrichment.get("error", "Unknown error")
+                    cleaned_df = pd.concat([cleaned_df, pd.DataFrame([cleaned_row])], ignore_index=True)
+                    continue
+                
+                # Add enriched data with clean formatting
+                # Name fields
+                cleaned_row["Full_Name"] = enrichment.get("full_name", "")
+                cleaned_row["First_Name"] = enrichment.get("first_name", "")
+                cleaned_row["Last_Name"] = enrichment.get("last_name", "")
+                
+                # Emails - join multiple emails with semicolon
+                emails = enrichment.get("emails", [])
+                if isinstance(emails, list):
+                    email_list = []
+                    for email in emails:
+                        if isinstance(email, dict) and "address" in email:
+                            email_list.append(email["address"])
+                        elif isinstance(email, str):
+                            email_list.append(email)
+                    cleaned_row["Emails"] = "; ".join(email_list)
+                else:
+                    cleaned_row["Emails"] = str(emails) if emails else ""
+                
+                # Phone numbers - join multiple phones with semicolon
+                phones = enrichment.get("phone_numbers", [])
+                if isinstance(phones, list):
+                    phone_list = []
+                    for phone in phones:
+                        if isinstance(phone, dict) and "number" in phone:
+                            phone_list.append(phone["number"])
+                        elif isinstance(phone, str):
+                            phone_list.append(phone)
+                    cleaned_row["Phone_Numbers"] = "; ".join(phone_list)
+                else:
+                    cleaned_row["Phone_Numbers"] = str(phones) if phones else ""
+                
+                # Social profiles
+                cleaned_row["LinkedIn_URL"] = enrichment.get("linkedin_url", "")
+                cleaned_row["Facebook_URL"] = enrichment.get("facebook_url", "")
+                cleaned_row["GitHub_URL"] = enrichment.get("github_url", "")
+                
+                # Location data
+                cleaned_row["Street_Address"] = enrichment.get("location_street_address", "")
+                cleaned_row["City"] = enrichment.get("location_locality", "")
+                cleaned_row["State"] = enrichment.get("location_region", "")
+                cleaned_row["Postal_Code"] = enrichment.get("location_postal_code", "")
+                cleaned_row["Country"] = enrichment.get("location_country", "")
+                
+                # Work info
+                cleaned_row["Job_Title"] = enrichment.get("job_title", "")
+                cleaned_row["Company"] = enrichment.get("job_company_name", "")
+                
+                # Birth date
+                cleaned_row["Birth_Date"] = enrichment.get("birth_date", "")
+                
+                # Add likelihood score if available
+                cleaned_row["Match_Score"] = enrichment.get("likelihood", "")
+                
+                cleaned_df = pd.concat([cleaned_df, pd.DataFrame([cleaned_row])], ignore_index=True)
+            
+            # Store cleaned dataframe
+            st.session_state['results_df'] = cleaned_df
             
             # Show success message and download buttons in col4
             with result_container:
                 st.success(f"✅ Enrichment successful! Processed {len(results_map)} rows.")
                 
-                # Download buttons
-                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                # Create download data once and store in session state
+                if 'csv_data' not in st.session_state or 'excel_data' not in st.session_state:
+                    # CSV data
+                    st.session_state['csv_data'] = cleaned_df.to_csv(index=False).encode("utf-8")
+                    
+                    # Excel data
+                    try:
+                        excel_buffer = io.BytesIO()
+                        with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+                            cleaned_df.to_excel(writer, index=False, sheet_name="Enriched_Data")
+                            
+                            # Auto-adjust column widths
+                            worksheet = writer.sheets["Enriched_Data"]
+                            for idx, col in enumerate(cleaned_df.columns):
+                                max_len = max(
+                                    cleaned_df[col].astype(str).str.len().max(),
+                                    len(col)
+                                ) + 2
+                                worksheet.set_column(idx, idx, min(max_len, 50))
+                        
+                        st.session_state['excel_data'] = excel_buffer.getvalue()
+                    except Exception as e:
+                        st.warning(f"Excel export unavailable: {e}")
+                        st.session_state['excel_data'] = None
+                
+                # Download buttons using session state data
                 st.download_button(
                     "📄 Download CSV",
-                    data=csv_bytes,
+                    data=st.session_state.get('csv_data', b''),
                     file_name="enriched_results.csv",
                     mime="text/csv",
+                    key="download_csv_btn"
                 )
                 
-                try:
-                    excel_buffer = io.BytesIO()
-                    results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
-                    excel_bytes = excel_buffer.getvalue()
+                if st.session_state.get('excel_data'):
                     st.download_button(
                         "📊 Download Excel",
-                        data=excel_bytes,
+                        data=st.session_state['excel_data'],
                         file_name="enriched_results.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_excel_btn"
                     )
-                except Exception as e:
-                    st.warning(f"Excel export unavailable: {e}")
