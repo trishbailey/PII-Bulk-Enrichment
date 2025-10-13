@@ -570,8 +570,3 @@ if run_enrich:
                     )
                 except Exception as e:
                     st.warning(f"Excel export unavailable: {e}")
-            
-            # Show results table below all columns
-            st.markdown("---")
-            st.markdown("### Results")
-            st.dataframe(results_df, width='stretch')
