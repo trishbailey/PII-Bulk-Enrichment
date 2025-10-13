@@ -51,6 +51,7 @@ INPUT_CATEGORIES: List[str] = [
     "ZIP Code",
     "Country",
     "Company or Employer",
+    "Job Title",
     "Email",
     "Phone Number",
     "Social Media Account 1",
@@ -70,6 +71,7 @@ CATEGORY_SYNONYMS: Dict[str, set] = {
     "ZIP Code": {"zip", "zip code", "zipcode", "postal code", "postcode"},
     "Country": {"country", "nation"},
     "Company or Employer": {"company", "employer", "organization", "org", "workplace", "current company"},
+    "Job Title": {"job title", "title", "position", "role"},
     "Email": {"email", "email address", "email_address", "e-mail", "work email", "personal email"},
     "Phone Number": {"phone", "phone number", "phone_number", "mobile", "cell", "telephone", "tel"},
     "Social Media Account 1": {"linkedin", "linkedin url", "linkedin profile", "profile url"},
@@ -135,6 +137,7 @@ UI_TO_API_INPUTS: Dict[str, str] = {
     "ZIP Code": "postal_code",         # Fixed: was "zip"
     "Country": "country",
     "Company or Employer": "company",
+    "Job Title": "job_title",
     "Email": "email",
     "Phone Number": "phone",
     "Social Media Account 1": "profile",
@@ -243,7 +246,7 @@ if not api_key:
     st.error("No PDL API key found. Add PDL_API_KEY to Streamlit Secrets or environment.")
     st.stop()
 
-# Initialize PDL client - set sandbox=False for production
+# Initialize PDL client for production
 client = PDLPY(api_key=api_key, sandbox=False)  # Production mode - charges apply!
 
 # ---------------------------
@@ -287,6 +290,9 @@ if "row_count" not in st.session_state:
 
 selected_outputs: List[str] = []
 input_mapping: Dict[str, str] = {}
+
+# Get required_expr from session state or use empty string
+required_expr = st.session_state.get("required_expr_input", "")
 
 # ---------------------------
 # Step 1 — Upload
@@ -403,13 +409,34 @@ with col3:
     required_expr = st.text_input(
         "Required fields expression", 
         placeholder="e.g., emails OR phone_numbers",
-        help="Use field names like: emails, phone_numbers, linkedin_url, experience, education. Combine with AND/OR/()."
+        help="Use field names like: emails, phone_numbers, linkedin_url, experience, education. Combine with AND/OR/().",
+        key="required_expr_input"
     )
     
     # Check for conflicts with input fields
     if required_expr and input_mapping:
-        input_api_fields = set(UI_TO_API_INPUTS.get(cat) for cat in input_mapping.keys())
-        required_fields = set(re.findall(r'\b[a-z_]+\b', required_expr.lower()))
+        # Map singular to plural forms for proper matching
+        REQUIRED_EQUIV = {
+            "email": "emails", 
+            "phone": "phone_numbers", 
+            "profile": "profiles",
+            "company": "job_company_name"
+        }
+        
+        # Get API fields from input mapping and normalize
+        input_api_fields = set()
+        for cat in input_mapping.keys():
+            field = UI_TO_API_INPUTS.get(cat)
+            if field:
+                normalized = REQUIRED_EQUIV.get(field, field)
+                input_api_fields.add(normalized)
+        
+        # Extract fields from required expression and normalize
+        required_fields = set()
+        for field in re.findall(r'\b[a-z_]+\b', required_expr.lower()):
+            normalized = REQUIRED_EQUIV.get(field, field)
+            required_fields.add(normalized)
+        
         conflicts = input_api_fields & required_fields
         if conflicts:
             st.warning(f"⚠️ Fields {conflicts} are used as both input and required parameters. PDL won't honor the required constraint for these fields.")
@@ -433,6 +460,8 @@ education AND (emails OR phone_numbers)  # Must have education and at least one 
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # ---------------------------
 # Step 4 — Enrich
 # ---------------------------
@@ -444,9 +473,9 @@ with col4:
     max_workers = st.slider(
         "Max parallel requests", 
         min_value=1, 
-        max_value=8, 
-        value=1,  # Default to 1 for sandbox
-        help="Sandbox is limited to ~5 calls/min; keep this low to avoid 429 errors."
+        max_value=20, 
+        value=4,  # Default to 4 for production
+        help="Adjust based on your PDL rate limits. Start low and increase if needed."
     )
     run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
     
