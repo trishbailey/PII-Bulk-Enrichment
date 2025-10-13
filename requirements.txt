@@ -1,5 +1,4 @@
 streamlit>=1.37
-streamlit-confetti
 pandas>=2.2
 peopledatalabs
 openpyxl>=3.1
