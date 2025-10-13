@@ -1,9 +1,7 @@
-streamlit-confetti
 streamlit>=1.37
+streamlit-confetti
 pandas>=2.2
-httpx>=0.27
-tenacity>=8.2
-python-dotenv>=1.0
-openpyxl>=3.1   # to read .xlsx
-xlsxwriter
 peopledatalabs
+openpyxl>=3.1
+xlsxwriter
+python-dotenv>=1.0
