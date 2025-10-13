@@ -374,16 +374,6 @@ with col2:
             
             Without a valid combination, the API won't return results.
             """)
-
-        # Optional: show a dry-run preview of first 3 payloads
-        show_preview = st.checkbox("Preview first 3 request payloads", value=False)
-        if show_preview and input_mapping:
-            preview_payloads = []
-            for _, row in df_preview.head(3).iterrows():
-                payload = build_params(row.to_dict(), input_mapping, selected_outputs=[], 
-                                     required_expr=None, include_if_matched=False, titlecase=False)
-                preview_payloads.append(payload)
-            st.code(json.dumps(preview_payloads, indent=2), language="json")
     else:
         st.info("Please upload a file first.")
 
@@ -470,7 +460,7 @@ education AND (emails OR phone_numbers)  # Must have education and at least one 
 with col4:
     st.markdown("<div class='right-box'>", unsafe_allow_html=True)
     st.markdown("<div class='step-pill'>Step 4: Enrich</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color: #000;'>Click to run enrichment and download results. Note: Sandbox API is limited to ~5 calls/minute.</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color: #000;'>Click to run enrichment.</small>", unsafe_allow_html=True)
 
     max_workers = st.slider(
         "Max parallel requests", 
@@ -480,6 +470,10 @@ with col4:
         help="Sandbox is limited to ~5 calls/min; keep this low to avoid 429 errors."
     )
     run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
+    
+    # Container for success message and download buttons
+    result_container = st.container()
+    
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------
@@ -487,13 +481,12 @@ with col4:
 # ---------------------------
 if run_enrich:
     if st.session_state.df is None:
-        st.error("Please upload a file first.")
+        with result_container:
+            st.error("Please upload a file first.")
     elif not input_mapping:
-        st.error("Please map at least one input field before running.")
+        with result_container:
+            st.error("Please map at least one input field before running.")
     else:
-        # Add a container for the notification message
-        notification_container = st.empty()
-        
         df_to_enrich = st.session_state.df
         progress = st.progress(0.0)
         memo: Dict[Tuple, Dict] = {}
@@ -535,7 +528,8 @@ if run_enrich:
 
         # Guard against division by zero
         if total == 0:
-            st.warning("No rows to enrich.")
+            with result_container:
+                st.warning("No rows to enrich.")
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as ex:
                 futures = [(idx, ex.submit(one, row.to_dict())) for idx, row in df_to_enrich.iterrows()]
@@ -547,64 +541,37 @@ if run_enrich:
                         results_map[idx] = {"error": str(e)}
                     progress.progress(i / total)
 
-            # Show success notification with scroll prompt
-            notification_container.success(
-                f"✅ Enrichment successful! Processed {len(results_map)} rows. "
-                f"**Please scroll down to see your results and download options.**"
-            )
-            
-            # Add some visual separation
-            st.markdown("---")
-            
-            # Results section with clear header
-            st.markdown("### 📊 Enrichment Results")
-            
+            # Store results in session state for download buttons
             results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
-            st.dataframe(results_df, width='stretch')
-
-            # Download section with clear header
-            st.markdown("### 💾 Download Your Results")
+            st.session_state['results_df'] = results_df
             
-            col_csv, col_excel = st.columns(2)
-            
-            with col_csv:
-                # CSV download
+            # Show success message and download buttons in col4
+            with result_container:
+                st.success(f"✅ Enrichment successful! Processed {len(results_map)} rows.")
+                
+                # Download buttons
                 csv_bytes = results_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    "📄 Download as CSV",
+                    "📄 Download CSV",
                     data=csv_bytes,
                     file_name="enriched_results.csv",
                     mime="text/csv",
                 )
-            
-            with col_excel:
-                # Excel download
+                
                 try:
                     excel_buffer = io.BytesIO()
                     results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
                     excel_bytes = excel_buffer.getvalue()
                     st.download_button(
-                        "📊 Download as Excel",
+                        "📊 Download Excel",
                         data=excel_bytes,
                         file_name="enriched_results.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
                 except Exception as e:
                     st.warning(f"Excel export unavailable: {e}")
-
-# ---------------------------
-# Footer note
-# ---------------------------
-st.caption(
-    """
-    💡 Tips:
-    - The Sandbox API returns synthetic test data only (not real contact info)
-    - Sandbox is rate-limited to ~5 requests per minute
-    - Phone numbers must start with + and country code (e.g., +1 for US). The app auto-adds +1 to 10/11-digit US numbers only
-    - International phone numbers need manual + prefix (e.g., +44 for UK, +33 for France)
-    - Use the 'required' field to only pay for responses with the data you need
-    - The app deduplicates identical request payloads in-memory during a run
-    - Using PDL's official Python SDK with sandbox=True
-    - For production use, switch to sandbox=False and monitor API costs
-    """
-)
+            
+            # Show results table below all columns
+            st.markdown("---")
+            st.markdown("### Results")
+            st.dataframe(results_df, width='stretch')
