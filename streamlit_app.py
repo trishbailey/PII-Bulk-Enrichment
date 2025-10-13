@@ -162,7 +162,7 @@ UI_TO_DATA_INCLUDE: Dict[str, str] = {
 
 
 def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str], 
-                 required_expr: str = None, include_if_matched: bool = False, titlecase: bool = False) -> Dict[str, Any]:
+                 required_expr: str = None) -> Dict[str, Any]:
     """Build API parameters with proper types and data_include support."""
     params: Dict[str, Any] = {}
     list_fields = {"profile", "email", "phone", "name"}  # Added "name" as list field
@@ -208,12 +208,6 @@ def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_ou
     # Add required parameter if specified
     if required_expr:
         params["required"] = required_expr
-    
-    # Add optional flags
-    if include_if_matched:
-        params["include_if_matched"] = True
-    if titlecase:
-        params["titlecase"] = True
     
     params["pretty"] = True
     return params
@@ -427,13 +421,6 @@ experience AND work_email                # Must have both
 emails OR phone_numbers                  # Must have either
 education AND (emails OR phone_numbers)  # Must have education and at least one contact method
         """)
-    
-    # Additional options
-    st.markdown("---")
-    st.markdown("**Additional Options**")
-    col_inc, col_tc = st.columns(2)
-    include_if_matched = col_inc.checkbox("Include matched inputs", value=False, help="Show which input fields matched the profile (include_if_matched)")
-    titlecase = col_tc.checkbox("Title-case response", value=False, help="Return text in title case instead of lowercase (titlecase)")
     
     with st.expander("Developer note: Output mapping"):
         st.write(
