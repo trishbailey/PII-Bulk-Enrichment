@@ -252,6 +252,10 @@ if not api_key:
 # Initialize PDL client with sandbox=True
 client = PDLPY(api_key=api_key, sandbox=True)
 
+# To switch to production (real data), change to:
+# client = PDLPY(api_key=api_key, sandbox=False)
+# WARNING: Production calls will be charged to your account!
+
 # ---------------------------
 # Styles
 # ---------------------------
@@ -487,6 +491,9 @@ if run_enrich:
     elif not input_mapping:
         st.error("Please map at least one input field before running.")
     else:
+        # Add a container for the notification message
+        notification_container = st.empty()
+        
         df_to_enrich = st.session_state.df
         progress = st.progress(0.0)
         memo: Dict[Tuple, Dict] = {}
@@ -540,32 +547,50 @@ if run_enrich:
                         results_map[idx] = {"error": str(e)}
                     progress.progress(i / total)
 
-            results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
-            st.success(f"Enrichment completed for {len(results_df)} rows!")
-            # Skip confetti - it's causing issues with the library version
-            st.dataframe(results_df, width='stretch')  # Updated from use_container_width=True
-
-            # Downloads
-            csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Download Enriched CSV",
-                data=csv_bytes,
-                file_name="enriched_results.csv",
-                mime="text/csv",
+            # Show success notification with scroll prompt
+            notification_container.success(
+                f"✅ Enrichment successful! Processed {len(results_map)} rows. "
+                f"**Please scroll down to see your results and download options.**"
             )
+            
+            # Add some visual separation
+            st.markdown("---")
+            
+            # Results section with clear header
+            st.markdown("### 📊 Enrichment Results")
+            
+            results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
+            st.dataframe(results_df, width='stretch')
 
-            try:
-                excel_buffer = io.BytesIO()
-                results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
-                excel_bytes = excel_buffer.getvalue()
+            # Download section with clear header
+            st.markdown("### 💾 Download Your Results")
+            
+            col_csv, col_excel = st.columns(2)
+            
+            with col_csv:
+                # CSV download
+                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    "Download Enriched Excel",
-                    data=excel_bytes,
-                    file_name="enriched_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "📄 Download as CSV",
+                    data=csv_bytes,
+                    file_name="enriched_results.csv",
+                    mime="text/csv",
                 )
-            except Exception as e:
-                st.warning(f"Excel export unavailable: {e}")
+            
+            with col_excel:
+                # Excel download
+                try:
+                    excel_buffer = io.BytesIO()
+                    results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
+                    excel_bytes = excel_buffer.getvalue()
+                    st.download_button(
+                        "📊 Download as Excel",
+                        data=excel_bytes,
+                        file_name="enriched_results.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception as e:
+                    st.warning(f"Excel export unavailable: {e}")
 
 # ---------------------------
 # Footer note
