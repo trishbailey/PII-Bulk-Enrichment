@@ -5,13 +5,13 @@ import html
 import json
 import time
 import difflib
-from typing import Dict, List, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import streamlit as st
 import streamlit_confetti as stc
-from pdl_client import PDLClient
+from peopledatalabs import PDLPY
 
 # ---------------------------
 # App config (must be first Streamlit call)
@@ -28,8 +28,8 @@ def load_df_from_bytes(file_bytes: bytes, filename: str) -> pd.DataFrame:
     name = filename.lower()
     if name.endswith(".csv"):
         return pd.read_csv(bio)
-    # Requires openpyxl for .xlsx
-    return pd.read_excel(bio)
+    # Explicitly use openpyxl for .xlsx
+    return pd.read_excel(bio, engine='openpyxl')
 
 
 def _norm(s: str) -> str:
@@ -50,8 +50,8 @@ INPUT_CATEGORIES: List[str] = [
     "City or Town",
     "State",
     "ZIP Code",
+    "Country",
     "Company or Employer",
-    "Job Title",
     "Email",
     "Phone Number",
     "Social Media Account 1",
@@ -69,8 +69,8 @@ CATEGORY_SYNONYMS: Dict[str, set] = {
     "City or Town": {"city", "town", "locality", "municipality"},
     "State": {"state", "province", "region"},
     "ZIP Code": {"zip", "zip code", "zipcode", "postal code", "postcode"},
+    "Country": {"country", "nation"},
     "Company or Employer": {"company", "employer", "organization", "org", "workplace", "current company"},
-    "Job Title": {"job title", "title", "position", "role"},
     "Email": {"email", "email address", "email_address", "e-mail", "work email", "personal email"},
     "Phone Number": {"phone", "phone number", "phone_number", "mobile", "cell", "telephone", "tel"},
     "Social Media Account 1": {"linkedin", "linkedin url", "linkedin profile", "profile url"},
@@ -121,11 +121,9 @@ def infer_mapping(user_cols: List[str], df_sample: pd.DataFrame, threshold: floa
 
 
 # ---------------------------
-# UI <-> API field maps (verify against your PDL SDK)
+# UI <-> API field maps
 # ---------------------------
-# NOTE: These keys are COMMON patterns but may not match your exact PDL parameters.
-# Verify in your environment and adjust as needed. If a key is wrong, PDL may ignore it
-# or return an error. Using a map lets you change the API param names in one place.
+# Fixed to match PDL's actual parameter names
 UI_TO_API_INPUTS: Dict[str, str] = {
     "First and last name together": "name",
     "First Name": "first_name",
@@ -133,66 +131,112 @@ UI_TO_API_INPUTS: Dict[str, str] = {
     "Middle Name": "middle_name",
     "Location": "location",
     "Street Address": "street_address",
-    "City or Town": "city",
-    "State": "state",
-    "ZIP Code": "zip",
+    "City or Town": "locality",        # Fixed: was "city"
+    "State": "region",                 # Fixed: was "state"
+    "ZIP Code": "postal_code",         # Fixed: was "zip"
+    "Country": "country",
     "Company or Employer": "company",
-    "Job Title": "job_title",
     "Email": "email",
     "Phone Number": "phone",
-    "Social Media Account 1": "profile1",
-    "Social Media Account 2": "profile2",
-    "Social Media Account 3": "profile3",
+    "Social Media Account 1": "profile",
+    "Social Media Account 2": "profile",
+    "Social Media Account 3": "profile",
 }
 
-# If you want to limit the response to specific fields, map UI labels -> PDL field names here.
-# Leave a label unmapped to exclude it from the `fields` parameter.
-UI_TO_API_OUTPUTS: Dict[str, str] = {
-    # EXAMPLES — ADJUST/VERIFY in your environment before enabling:
-    # "Full Name": "full_name",
-    # "Birth Year": "birth_year",
-    # "Emails": "emails",
-    # "Phone Numbers": "phone_numbers",
-    # "LinkedIn URL": "linkedin_url",
-    # "Facebook URL": "facebook_url",
-    # "GitHub URL": "github_url",
-    # "Other Social Media": "profiles",
-    # "Street Address": "street_address",
-    # "City or Town": "city",
-    # "State": "state",
-    # "ZIP Code": "zip",
-    # "Job Title": "job_title",
-    # "Company or Employer": "company",
+# Map UI labels to PDL's data_include field names
+UI_TO_DATA_INCLUDE: Dict[str, str] = {
+    "Full Name": "full_name",
+    "Birth Date": "birth_date",  # Changed from birth_year
+    "Emails": "emails.address",
+    "Phone Numbers": "phone_numbers",
+    "LinkedIn URL": "linkedin_url",
+    "Facebook URL": "facebook_url",
+    "GitHub URL": "github_url",
+    "Other Social Media": "profiles.url",
+    "Street Address": "location_street_address",
+    "City or Town": "location_locality",
+    "State": "location_region",
+    "ZIP Code": "location_postal_code",
+    "Job Title": "job_title",
+    "Company or Employer": "job_company_name",
 }
 
 
-def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str]) -> Dict[str, str]:
-    params: Dict[str, str] = {}
+def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str], 
+                 required_expr: str = None, include_if_matched: bool = False, titlecase: bool = False) -> Dict[str, Any]:
+    """Build API parameters with proper types and data_include support."""
+    params: Dict[str, Any] = {}
+    list_fields = {"profile", "email", "phone", "name"}  # Added "name" as list field
+    list_acc: Dict[str, List[str]] = {k: [] for k in list_fields}
+
     for ui_cat, user_col in input_mapping.items():
         if user_col not in row:
             continue
-        val = row[user_col]
-        if pd.notna(val) and str(val).strip():
-            api_key = UI_TO_API_INPUTS.get(ui_cat)
-            if api_key:
-                params[api_key] = str(val).strip()
+        val = str(row[user_col]).strip()
+        if not val or val.lower() == "nan":
+            continue
+        api_key = UI_TO_API_INPUTS.get(ui_cat)
+        if not api_key:
+            continue
+        
+        # Validate phone numbers must start with +country code
+        if api_key == "phone" and not val.startswith("+"):
+            # Try to add US prefix for common formats
+            if val.startswith("1") and len(val) == 11:
+                val = "+" + val
+            elif len(val) == 10 and val[0].isdigit():
+                val = "+1" + val
+            else:
+                # Skip invalid phone format - international numbers need manual + prefix
+                continue
+        
+        # Accumulate list fields
+        if api_key in list_fields:
+            list_acc[api_key].append(val)
+        else:
+            params[api_key] = val
 
-    # Only send 'fields' if you've verified UI_TO_API_OUTPUTS mapping
-    api_fields = [UI_TO_API_OUTPUTS.get(x) for x in selected_outputs if UI_TO_API_OUTPUTS.get(x)]
-    if api_fields:
-        params["fields"] = api_fields
+    # Add list fields to params
+    for k, vals in list_acc.items():
+        if vals:
+            params[k] = vals
+
+    # Use data_include to limit response fields (not "fields")
+    inc = [UI_TO_DATA_INCLUDE[x] for x in selected_outputs if x in UI_TO_DATA_INCLUDE]
+    if inc:
+        params["data_include"] = ",".join(inc)
+    
+    # Add required parameter if specified
+    if required_expr:
+        params["required"] = required_expr
+    
+    # Add optional flags
+    if include_if_matched:
+        params["include_if_matched"] = True
+    if titlecase:
+        params["titlecase"] = True
+    
+    params["pretty"] = True
     return params
 
 
 def _params_key(d: Dict) -> Tuple:
-    return tuple(sorted((k, str(v)) for k, v in d.items()))
+    """Create a hashable key from params dict for deduplication."""
+    items = []
+    for k, v in sorted(d.items()):
+        if isinstance(v, list):
+            items.append((k, tuple(sorted(v))))
+        else:
+            items.append((k, str(v)))
+    return tuple(items)
 
 
 def call_with_backoff(fn, *args, retries: int = 3, base: float = 0.6, **kwargs):
+    """Call function with exponential backoff."""
     for attempt in range(retries + 1):
         try:
             return fn(*args, **kwargs)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if attempt == retries:
                 raise
             time.sleep(base * (2 ** attempt))
@@ -203,10 +247,11 @@ def call_with_backoff(fn, *args, retries: int = 3, base: float = 0.6, **kwargs):
 # ---------------------------
 api_key = st.secrets.get("PDL_API_KEY") or os.getenv("PDL_API_KEY")
 if not api_key:
-    st.error("No PDL API key found. Add `PDL_API_KEY` to Streamlit Secrets or environment.")
+    st.error("No PDL API key found. Add PDL_API_KEY to Streamlit Secrets or environment.")
     st.stop()
 
-client = PDLClient(api_key)
+# Initialize PDL client with sandbox=True
+client = PDLPY(api_key=api_key, sandbox=True)
 
 # ---------------------------
 # Styles
@@ -286,7 +331,7 @@ with col1:
                 """,
                 unsafe_allow_html=True,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             st.error(f"File upload failed: {str(e)}")
             st.session_state.df = None
     st.markdown("</div>", unsafe_allow_html=True)
@@ -314,13 +359,26 @@ with col2:
             sel = st.selectbox(label, options=column_options, index=idx, key=f"map_{cat}")
             if sel != "(Do not include)":
                 input_mapping[cat] = sel
+        
+        # Show valid input combinations info
+        with st.expander("ℹ️ Valid input combinations"):
+            st.markdown("""
+            **PDL requires one of these parameter combinations for a match:**
+            - Email address
+            - Phone number (with country code)
+            - Social media profile URL
+            - Name + (Company OR Location OR Address)
+            
+            Without a valid combination, the API won't return results.
+            """)
 
         # Optional: show a dry-run preview of first 3 payloads
         show_preview = st.checkbox("Preview first 3 request payloads", value=False)
         if show_preview and input_mapping:
             preview_payloads = []
             for _, row in df_preview.head(3).iterrows():
-                payload = build_params(row.to_dict(), input_mapping, selected_outputs=[])
+                payload = build_params(row.to_dict(), input_mapping, selected_outputs=[], 
+                                     required_expr=None, include_if_matched=False, titlecase=False)
                 preview_payloads.append(payload)
             st.code(json.dumps(preview_payloads, indent=2), language="json")
     else:
@@ -329,16 +387,16 @@ with col2:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------
-# Step 3 — Select Outputs (optional fields filter)
+# Step 3 — Select Outputs
 # ---------------------------
 with col3:
     st.markdown("<div class='middle-box'>", unsafe_allow_html=True)
     st.markdown("<div class='step-pill'>Step 3: Select Outputs</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color: #000;'>Choose output fields you want. These must map to PDL field names in the code to be sent via the 'fields' parameter. If no map is provided, all defaults may be returned by the API.</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color: #000;'>Choose output fields you want. Uses PDL's 'data_include' parameter to limit response size.</small>", unsafe_allow_html=True)
 
     OUTPUT_FIELDS = [
         "Full Name",
-        "Birth Year",
+        "Birth Date",  # Changed from Birth Year
         "Emails",
         "Phone Numbers",
         "LinkedIn URL",
@@ -358,12 +416,46 @@ with col3:
         if st.checkbox(field, key=f"out_{field}"):
             selected_outputs.append(field)
 
+    # Required parameter section
+    st.markdown("---")
+    st.markdown("**Required Fields (Advanced)**")
+    st.markdown("<small style='color: #000;'>Specify fields that must be present for a response to count as a match (and be charged).</small>", unsafe_allow_html=True)
+    
+    required_expr = st.text_input(
+        "Required fields expression", 
+        placeholder="e.g., emails OR phone_numbers",
+        help="Use field names like: emails, phone_numbers, linkedin_url, experience, education. Combine with AND/OR/()."
+    )
+    
+    # Check for conflicts with input fields
+    if required_expr and input_mapping:
+        input_api_fields = set(UI_TO_API_INPUTS.get(cat) for cat in input_mapping.keys())
+        required_fields = set(re.findall(r'\b[a-z_]+\b', required_expr.lower()))
+        conflicts = input_api_fields & required_fields
+        if conflicts:
+            st.warning(f"⚠️ Fields {conflicts} are used as both input and required parameters. PDL won't honor the required constraint for these fields.")
+    
+    with st.expander("Required parameter examples"):
+        st.code("""
+emails                                   # Must have emails
+experience AND work_email                # Must have both
+emails OR phone_numbers                  # Must have either
+education AND (emails OR phone_numbers)  # Must have education and at least one contact method
+        """)
+    
+    # Additional options
+    st.markdown("---")
+    st.markdown("**Additional Options**")
+    col_inc, col_tc = st.columns(2)
+    include_if_matched = col_inc.checkbox("Include matched inputs", value=False, help="Show which input fields matched the profile (include_if_matched)")
+    titlecase = col_tc.checkbox("Title-case response", value=False, help="Return text in title case instead of lowercase (titlecase)")
+    
     with st.expander("Developer note: Output mapping"):
         st.write(
             """
-            The app only includes a `fields` parameter if the UI labels you selected are mapped in `UI_TO_API_OUTPUTS`.
-            Review and edit that dictionary in the source to match your PDL account's schema. Unmapped labels are ignored for the
-            `fields` filter (the request is sent without `fields`).
+            The app uses PDL's 'data_include' parameter to limit response fields.
+            The UI_TO_DATA_INCLUDE dictionary maps UI labels to PDL field names.
+            Selected fields will be included as a comma-separated string in the API request.
             """
         )
 
@@ -375,9 +467,15 @@ with col3:
 with col4:
     st.markdown("<div class='right-box'>", unsafe_allow_html=True)
     st.markdown("<div class='step-pill'>Step 4: Enrich</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color: #000;'>Click to run enrichment and download results.</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color: #000;'>Click to run enrichment and download results. Note: Sandbox API is limited to ~5 calls/minute.</small>", unsafe_allow_html=True)
 
-    max_workers = st.slider("Max parallel requests", min_value=1, max_value=8, value=4, help="Tune based on your PDL rate limits.")
+    max_workers = st.slider(
+        "Max parallel requests", 
+        min_value=1, 
+        max_value=8, 
+        value=1,  # Default to 1 for sandbox
+        help="Sandbox is limited to ~5 calls/min; keep this low to avoid 429 errors."
+    )
     run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -395,66 +493,94 @@ if run_enrich:
         memo: Dict[Tuple, Dict] = {}
 
         def one(row_dict: Dict) -> Dict:
-            params = build_params(row_dict, input_mapping, selected_outputs)
+            """Call PDL API for one row."""
+            params = build_params(row_dict, input_mapping, selected_outputs, 
+                                required_expr, include_if_matched, titlecase)
             if not params:
                 return {"error": "No valid parameters built for this row."}
             key = _params_key(params)
             if key in memo:
                 return memo[key]
+
             try:
-                # Match the original usage pattern
-                out = call_with_backoff(client.person_enrich, params)
-                # People Data Labs clients often return {"data": {...}}, but not guaranteed; be safe:
-                data = (out or {}).get("data", out or {})
-            except Exception as e:  # noqa: BLE001
+                resp = call_with_backoff(client.person.enrichment, **params)
+                try:
+                    j = resp.json()
+                except Exception:
+                    j = None
+
+                # First check HTTP status
+                if getattr(resp, "status_code", 0) != 200:
+                    data = {"error": f"HTTP {resp.status_code}", "body": j or getattr(resp, "text", "")}
+                else:
+                    # Then check PDL's JSON status wrapper
+                    if isinstance(j, dict) and j.get("status") != 200:
+                        data = {"error": j.get("error", j)}
+                    else:
+                        data = (j or {}).get("data", j or {})
+            except Exception as e:
                 data = {"error": str(e)}
+
             memo[key] = data
             return data
 
         results_map: Dict[int, Dict] = {}
         total = len(df_to_enrich)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [(idx, ex.submit(one, row.to_dict())) for idx, row in df_to_enrich.iterrows()]
-            for i, (idx, fut) in enumerate(futures, 1):
-                # consume in submission order to keep progress smooth
-                try:
-                    results_map[idx] = fut.result()
-                except Exception as e:  # noqa: BLE001
-                    results_map[idx] = {"error": str(e)}
-                progress.progress(i / total)
+        # Guard against division by zero
+        if total == 0:
+            st.warning("No rows to enrich.")
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [(idx, ex.submit(one, row.to_dict())) for idx, row in df_to_enrich.iterrows()]
+                for i, (idx, fut) in enumerate(futures, 1):
+                    # consume in submission order to keep progress smooth
+                    try:
+                        results_map[idx] = fut.result()
+                    except Exception as e:
+                        results_map[idx] = {"error": str(e)}
+                    progress.progress(i / total)
 
-        results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
-        st.success(f"Enrichment completed for {len(results_df)} rows!")
-        stc.confetti()
-        st.dataframe(results_df, use_container_width=True)
+            results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
+            st.success(f"Enrichment completed for {len(results_df)} rows!")
+            stc.confetti()
+            st.dataframe(results_df, use_container_width=True)
 
-        # Downloads
-        csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download Enriched CSV",
-            data=csv_bytes,
-            file_name="enriched_results.csv",
-            mime="text/csv",
-        )
-
-        try:
-            excel_buffer = io.BytesIO()
-            results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
-            excel_bytes = excel_buffer.getvalue()
+            # Downloads
+            csv_bytes = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "Download Enriched Excel",
-                data=excel_bytes,
-                file_name="enriched_results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Download Enriched CSV",
+                data=csv_bytes,
+                file_name="enriched_results.csv",
+                mime="text/csv",
             )
-        except Exception as e:  # noqa: BLE001
-            st.warning(f"Excel export unavailable: {e}")
+
+            try:
+                excel_buffer = io.BytesIO()
+                results_df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
+                excel_bytes = excel_buffer.getvalue()
+                st.download_button(
+                    "Download Enriched Excel",
+                    data=excel_bytes,
+                    file_name="enriched_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception as e:
+                st.warning(f"Excel export unavailable: {e}")
 
 # ---------------------------
 # Footer note
 # ---------------------------
 st.caption(
-    "Tip: If you see many duplicate rows hitting the API, the app deduplicates identical request payloads in-memory during a run.\n"
-    "Adjust UI_TO_API_INPUTS/UI_TO_API_OUTPUTS to your PDL schema before relying on 'fields' filtering."
+    """
+    💡 Tips:
+    - The Sandbox API returns synthetic test data only (not real contact info)
+    - Sandbox is rate-limited to ~5 requests per minute
+    - Phone numbers must start with + and country code (e.g., +1 for US). The app auto-adds +1 to 10/11-digit US numbers only
+    - International phone numbers need manual + prefix (e.g., +44 for UK, +33 for France)
+    - Use the 'required' field to only pay for responses with the data you need
+    - The app deduplicates identical request payloads in-memory during a run
+    - Using PDL's official Python SDK with sandbox=True
+    - For production use, switch to sandbox=False and monitor API costs
+    """
 )
