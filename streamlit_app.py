@@ -405,13 +405,6 @@ with col4:
     st.markdown("<div class='step-pill'>Step 4: Enrich</div>", unsafe_allow_html=True)
     st.markdown("<small style='color: #000;'>Click to run enrichment.</small>", unsafe_allow_html=True)
 
-    max_workers = st.slider(
-        "Max parallel requests", 
-        min_value=1, 
-        max_value=20, 
-        value=4,  # Default to 4 for production
-        help="Adjust based on your PDL rate limits. Start low and increase if needed."
-    )
     run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
     
     # Container for success message and download buttons
@@ -474,7 +467,7 @@ if run_enrich:
             with result_container:
                 st.warning("No rows to enrich.")
         else:
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = [(idx, ex.submit(one, row.to_dict())) for idx, row in df_to_enrich.iterrows()]
                 for i, (idx, fut) in enumerate(futures, 1):
                     # consume in submission order to keep progress smooth
