@@ -15,7 +15,7 @@ from peopledatalabs import PDLPY
 # ---------------------------
 # App config (must be first Streamlit call)
 # ---------------------------
-st.set_page_config(page_title="Get Contact Info", layout="wide")
+st.set_page_config(page_title="Contact Enrichment Tool", layout="wide")
 
 # ---------------------------
 # Helpers & caching
