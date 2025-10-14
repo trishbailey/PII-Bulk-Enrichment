@@ -2,7 +2,6 @@ import os
 import io
 import re
 import html
-import json
 import time
 import difflib
 from typing import Dict, List, Tuple, Any
@@ -159,6 +158,7 @@ UI_TO_DATA_INCLUDE: Dict[str, str] = {
     "City or Town": "location_locality",
     "State": "location_region",
     "ZIP Code": "location_postal_code",
+    "Country": "location_country",
     "Job Title": "job_title",
     "Company or Employer": "job_company_name",
 }
@@ -384,6 +384,7 @@ with col3:
         "City or Town",
         "State",
         "ZIP Code",
+        "Country",
         "Job Title",
         "Company or Employer",
     ]
