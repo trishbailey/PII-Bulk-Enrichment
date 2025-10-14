@@ -15,7 +15,7 @@ from peopledatalabs import PDLPY
 # ---------------------------
 # App config (must be first Streamlit call)
 # ---------------------------
-st.set_page_config(page_title="Contact Enrichment Tool", layout="wide")
+st.set_page_config(page_title="Get Contact Info", layout="wide")
 
 # ---------------------------
 # Helpers & caching
@@ -164,8 +164,7 @@ UI_TO_DATA_INCLUDE: Dict[str, str] = {
 }
 
 
-def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str], 
-                 required_expr: str = None) -> Dict[str, Any]:
+def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str]) -> Dict[str, Any]:
     """Build API parameters with proper types and data_include support."""
     params: Dict[str, Any] = {}
     list_fields = {"profile", "email", "phone", "name"}  # Added "name" as list field
@@ -207,10 +206,6 @@ def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_ou
     inc = [UI_TO_DATA_INCLUDE[x] for x in selected_outputs if x in UI_TO_DATA_INCLUDE]
     if inc:
         params["data_include"] = ",".join(inc)
-    
-    # Add required parameter if specified
-    if required_expr:
-        params["required"] = required_expr
     
     params["pretty"] = True
     return params
@@ -274,7 +269,7 @@ div[data-testid="stFileUploader"] .drag-and-drop-area { display: none !important
     unsafe_allow_html=True,
 )
 
-st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>Contact Enrichment Tool</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>Get Contact Info</h1>", unsafe_allow_html=True)
 
 # ---------------------------
 # Layout & state
@@ -290,9 +285,6 @@ if "row_count" not in st.session_state:
 
 selected_outputs: List[str] = []
 input_mapping: Dict[str, str] = {}
-
-# Get required_expr from session state or use empty string
-required_expr = st.session_state.get("required_expr_input", "")
 
 # ---------------------------
 # Step 1 — Upload
@@ -400,63 +392,6 @@ with col3:
     for field in OUTPUT_FIELDS:
         if st.checkbox(field, key=f"out_{field}"):
             selected_outputs.append(field)
-
-    # Required parameter section
-    st.markdown("---")
-    st.markdown("**Required Fields (Advanced)**")
-    st.markdown("<small style='color: #000;'>Specify fields that must be present for a response to count as a match (and be charged).</small>", unsafe_allow_html=True)
-    
-    required_expr = st.text_input(
-        "Required fields expression", 
-        placeholder="e.g., emails OR phone_numbers",
-        help="Use field names like: emails, phone_numbers, linkedin_url, experience, education. Combine with AND/OR/().",
-        key="required_expr_input"
-    )
-    
-    # Check for conflicts with input fields
-    if required_expr and input_mapping:
-        # Map singular to plural forms for proper matching
-        REQUIRED_EQUIV = {
-            "email": "emails", 
-            "phone": "phone_numbers", 
-            "profile": "profiles",
-            "company": "job_company_name"
-        }
-        
-        # Get API fields from input mapping and normalize
-        input_api_fields = set()
-        for cat in input_mapping.keys():
-            field = UI_TO_API_INPUTS.get(cat)
-            if field:
-                normalized = REQUIRED_EQUIV.get(field, field)
-                input_api_fields.add(normalized)
-        
-        # Extract fields from required expression and normalize
-        required_fields = set()
-        for field in re.findall(r'\b[a-z_]+\b', required_expr.lower()):
-            normalized = REQUIRED_EQUIV.get(field, field)
-            required_fields.add(normalized)
-        
-        conflicts = input_api_fields & required_fields
-        if conflicts:
-            st.warning(f"⚠️ Fields {conflicts} are used as both input and required parameters. PDL won't honor the required constraint for these fields.")
-    
-    with st.expander("Required parameter examples"):
-        st.code("""
-emails                                   # Must have emails
-experience AND work_email                # Must have both
-emails OR phone_numbers                  # Must have either
-education AND (emails OR phone_numbers)  # Must have education and at least one contact method
-        """)
-    
-    with st.expander("Developer note: Output mapping"):
-        st.write(
-            """
-            The app uses PDL's 'data_include' parameter to limit response fields.
-            The UI_TO_DATA_INCLUDE dictionary maps UI labels to PDL field names.
-            Selected fields will be included as a comma-separated string in the API request.
-            """
-        )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
