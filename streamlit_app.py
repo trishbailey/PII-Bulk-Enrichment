@@ -27,7 +27,7 @@ def load_df_from_bytes(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if name.endswith(".csv"):
         return pd.read_csv(bio)
     # Explicitly use openpyxl for .xlsx
-    return pd.read_excel(bio, engine='openpyxl')
+    return pd.read_excel(bio, engine="openpyxl")
 
 
 def _norm(s: str) -> str:
@@ -84,12 +84,7 @@ ZIP_HINT = re.compile(r"^\d{5}(-\d{4})?$")
 
 
 def infer_mapping(user_cols: List[str], df_sample: pd.DataFrame, threshold: float = 0.86) -> Dict[str, Tuple[str, float]]:
-    """Infer mapping: category -> (best matching user column, confidence).
-
-    - Lexical similarity against synonyms
-    - Value-based hints (emails, phones, ZIPs, URLs)
-    - Only return matches at/above threshold
-    """
+    """Infer mapping: category -> (best matching user column, confidence)."""
     norm_to_orig = {_norm(c): c for c in user_cols}
     results: Dict[str, Tuple[str, float]] = {}
 
@@ -101,7 +96,7 @@ def infer_mapping(user_cols: List[str], df_sample: pd.DataFrame, threshold: floa
                 if score > best_score:
                     best_score, best_col = score, orig_col
 
-        # Value-based boosts using a small sample
+        # Value-based boosts
         if best_col is not None and best_score >= 0.70 and df_sample is not None and best_col in df_sample.columns:
             series = df_sample[best_col].dropna().astype(str).head(50)
             if cat == "Email" and len(series) and series.str.contains(EMAIL_HINT).mean() > 0.6:
@@ -121,9 +116,8 @@ def infer_mapping(user_cols: List[str], df_sample: pd.DataFrame, threshold: floa
 
 
 # ---------------------------
-# UI <-> API field maps
+# UI <-> API field maps (PDL inputs / outputs)
 # ---------------------------
-# Fixed to match PDL's actual parameter names
 UI_TO_API_INPUTS: Dict[str, str] = {
     "First and last name together": "name",
     "First Name": "first_name",
@@ -131,9 +125,9 @@ UI_TO_API_INPUTS: Dict[str, str] = {
     "Middle Name": "middle_name",
     "Location": "location",
     "Street Address": "street_address",
-    "City or Town": "locality",        # Fixed: was "city"
-    "State": "region",                 # Fixed: was "state"
-    "ZIP Code": "postal_code",         # Fixed: was "zip"
+    "City or Town": "locality",
+    "State": "region",
+    "ZIP Code": "postal_code",
     "Country": "country",
     "Company or Employer": "company",
     "Job Title": "job_title",
@@ -144,10 +138,9 @@ UI_TO_API_INPUTS: Dict[str, str] = {
     "Social Media Account 3": "profile",
 }
 
-# Map UI labels to PDL's data_include field names
 UI_TO_DATA_INCLUDE: Dict[str, str] = {
     "Full Name": "full_name",
-    "Birth Date": "birth_date",  # Changed from birth_year
+    "Birth Date": "birth_date",
     "Emails": "emails.address",
     "Phone Numbers": "phone_numbers",
     "LinkedIn URL": "linkedin_url",
@@ -167,7 +160,7 @@ UI_TO_DATA_INCLUDE: Dict[str, str] = {
 def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_outputs: List[str]) -> Dict[str, Any]:
     """Build API parameters with proper types and data_include support."""
     params: Dict[str, Any] = {}
-    list_fields = {"profile", "email", "phone", "name"}  # Added "name" as list field
+    list_fields = {"profile", "email", "phone", "name"}  # multi-valued inputs supported as lists
     list_acc: Dict[str, List[str]] = {k: [] for k in list_fields}
 
     for ui_cat, user_col in input_mapping.items():
@@ -179,40 +172,36 @@ def build_params(row: Dict[str, str], input_mapping: Dict[str, str], selected_ou
         api_key = UI_TO_API_INPUTS.get(ui_cat)
         if not api_key:
             continue
-        
-        # Validate phone numbers must start with +country code
+
+        # Normalize phone: require +country code; default +1 for 10/11-digit US-like numbers
         if api_key == "phone" and not val.startswith("+"):
-            # Try to add US prefix for common formats
-            if val.startswith("1") and len(val) == 11:
+            if val.startswith("1") and len(val) == 11 and val.isdigit():
                 val = "+" + val
-            elif len(val) == 10 and val[0].isdigit():
+            elif len(val) == 10 and val.isdigit():
                 val = "+1" + val
             else:
-                # Skip invalid phone format - international numbers need manual + prefix
+                # skip invalid international numbers lacking a leading +
                 continue
-        
-        # Accumulate list fields
+
         if api_key in list_fields:
             list_acc[api_key].append(val)
         else:
             params[api_key] = val
 
-    # Add list fields to params
     for k, vals in list_acc.items():
         if vals:
             params[k] = vals
 
-    # Use data_include to limit response fields (not "fields")
     inc = [UI_TO_DATA_INCLUDE[x] for x in selected_outputs if x in UI_TO_DATA_INCLUDE]
     if inc:
         params["data_include"] = ",".join(inc)
-    
+
     params["pretty"] = True
     return params
 
 
 def _params_key(d: Dict) -> Tuple:
-    """Create a hashable key from params dict for deduplication."""
+    """Hashable key from params dict for in-run de-dup."""
     items = []
     for k, v in sorted(d.items()):
         if isinstance(v, list):
@@ -227,22 +216,21 @@ def call_with_backoff(fn, *args, retries: int = 3, base: float = 0.6, **kwargs):
     for attempt in range(retries + 1):
         try:
             return fn(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             if attempt == retries:
                 raise
             time.sleep(base * (2 ** attempt))
 
 
 # ---------------------------
-# Secrets / API init
+# Secrets / API init (PRODUCTION)
 # ---------------------------
 api_key = st.secrets.get("PDL_API_KEY") or os.getenv("PDL_API_KEY")
 if not api_key:
     st.error("No PDL API key found. Add PDL_API_KEY to Streamlit Secrets or environment.")
     st.stop()
 
-# Initialize PDL client for production
-client = PDLPY(api_key=api_key, sandbox=False)  # Production mode - charges apply!
+client = PDLPY(api_key=api_key, sandbox=False)  # Production mode — charges apply
 
 # ---------------------------
 # Styles
@@ -250,17 +238,15 @@ client = PDLPY(api_key=api_key, sandbox=False)  # Production mode - charges appl
 st.markdown(
     """
 <style>
-/* Reduce top margin above app title */
 h1 { margin-top: 12px !important; }
-/* Remove blue background from step boxes */
 .upload-box, .middle-box, .right-box { background: none; border-radius: 0; padding: 0; margin-bottom: 0; }
-/* Stylish pill-shaped background for step titles */
-.step-pill { display: inline-block; background: linear-gradient(90deg, #4F8BF9 0%, #6FC3F7 100%); color: #fff; font-size: 1.38rem; font-weight: 700; padding: 16px 40px; border-radius: 32px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(79,139,249,0.10); }
-
-div[data-testid="stFileUploader"] button { color: #333 !important; font-weight: normal !important; border-radius: 8px !important; border: 1px solid #ddd !important; background: transparent !important; box-shadow: none !important; }
-/* Make Run enrichment button gray to match Browse Files */
-div.right-box button { background-color: #f5f5f5 !important; color: #333 !important; font-weight: normal !important; border-radius: 8px !important; border: 1px solid #ddd !important; box-shadow: none !important; }
-/* Hide Streamlit file uploader help text and drag-and-drop area */
+.step-pill { display: inline-block; background: linear-gradient(90deg, #4F8BF9 0%, #6FC3F7 100%);
+             color: #fff; font-size: 1.38rem; font-weight: 700; padding: 16px 40px; border-radius: 32px;
+             margin-bottom: 24px; box-shadow: 0 2px 8px rgba(79,139,249,0.10); }
+div[data-testid="stFileUploader"] button { color: #333 !important; font-weight: normal !important; border-radius: 8px !important;
+             border: 1px solid #ddd !important; background: transparent !important; box-shadow: none !important; }
+div.right-box button { background-color: #f5f5f5 !important; color: #333 !important; font-weight: normal !important; border-radius: 8px !important;
+             border: 1px solid #ddd !important; box-shadow: none !important; }
 div[data-testid="stFileUploader"] div:nth-child(2),
 div[data-testid="stFileUploader"] .uploadedFileInfo,
 div[data-testid="stFileUploader"] .drag-and-drop-area { display: none !important; }
@@ -305,8 +291,7 @@ with col1:
             st.session_state.row_count = len(df)
             st.session_state.input_cols = list(df.columns)
 
-            # Safe HTML for column list
-            col_list = '<br>'.join(f"- {html.escape(str(c))}" for c in st.session_state.input_cols)
+            col_list = "<br>".join(f"- {html.escape(str(c))}" for c in st.session_state.input_cols)
             st.markdown(
                 f"""
                 <div style='background-color:#e6f4ea;padding:16px;border-radius:8px;border:1px solid #b7e4c7;'>
@@ -346,18 +331,19 @@ with col2:
             sel = st.selectbox(label, options=column_options, index=idx, key=f"map_{cat}")
             if sel != "(Do not include)":
                 input_mapping[cat] = sel
-        
-        # Show valid input combinations info
+
         with st.expander("ℹ️ Valid input combinations"):
-            st.markdown("""
-            **PDL requires one of these parameter combinations for a match:**
-            - Email address
-            - Phone number (with country code)
-            - Social media profile URL
-            - Name + (Company OR Location OR Address)
-            
-            Without a valid combination, the API won't return results.
-            """)
+            st.markdown(
+                """
+                **PDL requires one of these parameter combinations for a match:**
+                - Email address
+                - Phone number (with country code)
+                - Social media profile URL
+                - Name + (Company OR Location OR Address)
+
+                Without a valid combination, the API won't return results.
+                """
+            )
     else:
         st.info("Please upload a file first.")
 
@@ -373,7 +359,7 @@ with col3:
 
     OUTPUT_FIELDS = [
         "Full Name",
-        "Birth Date",  # Changed from Birth Year
+        "Birth Date",
         "Emails",
         "Phone Numbers",
         "LinkedIn URL",
@@ -396,21 +382,26 @@ with col3:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
 # ---------------------------
-# Step 4 — Enrich
+# Step 4 — Enrich (controls)
 # ---------------------------
 with col4:
     st.markdown("<div class='right-box'>", unsafe_allow_html=True)
     st.markdown("<div class='step-pill'>Step 4: Enrich</div>", unsafe_allow_html=True)
     st.markdown("<small style='color: #000;'>Click to run enrichment.</small>", unsafe_allow_html=True)
 
+    max_workers = st.slider(
+        "Max parallel requests",
+        min_value=1,
+        max_value=20,
+        value=4,  # reasonable default for production; tune to your rate limits
+        help="Adjust based on your PDL plan's rate limits."
+    )
     run_enrich = st.button("✨ Run enrichment", key="enrich_btn")
-    
-    # Container for success message and download buttons
+
+    # Container for success/error messages
     result_container = st.container()
-    
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------
@@ -425,85 +416,71 @@ if run_enrich:
             st.error("Please map at least one input field before running.")
     else:
         df_to_enrich = st.session_state.df
-        progress = st.progress(0.0)
-        memo: Dict[Tuple, Dict] = {}
-
-        def one(row_dict: Dict) -> Dict:
-            """Call PDL API for one row."""
-            params = build_params(row_dict, input_mapping, selected_outputs, 
-                                required_expr, include_if_matched, titlecase)
-            if not params:
-                return {"error": "No valid parameters built for this row."}
-            key = _params_key(params)
-            if key in memo:
-                return memo[key]
-
-            try:
-                resp = call_with_backoff(client.person.enrichment, **params)
-                try:
-                    j = resp.json()
-                except Exception:
-                    j = None
-
-                # First check HTTP status
-                if getattr(resp, "status_code", 0) != 200:
-                    data = {"error": f"HTTP {resp.status_code}", "body": j or getattr(resp, "text", "")}
-                else:
-                    # Then check PDL's JSON status wrapper
-                    if isinstance(j, dict) and j.get("status") != 200:
-                        data = {"error": j.get("error", j)}
-                    else:
-                        data = (j or {}).get("data", j or {})
-            except Exception as e:
-                data = {"error": str(e)}
-
-            memo[key] = data
-            return data
-
-        results_map: Dict[int, Dict] = {}
         total = len(df_to_enrich)
-
-        # Guard against division by zero
         if total == 0:
             with result_container:
                 st.warning("No rows to enrich.")
         else:
-            with ThreadPoolExecutor(max_workers=8) as ex:
+            progress = st.progress(0.0)
+            memo: Dict[Tuple, Dict] = {}
+
+            def one(row_dict: Dict) -> Dict:
+                """Call PDL API for one row."""
+                params = build_params(row_dict, input_mapping, selected_outputs)
+                if not params:
+                    return {"error": "No valid parameters built for this row."}
+                key = _params_key(params)
+                if key in memo:
+                    return memo[key]
+
+                try:
+                    resp = call_with_backoff(client.person.enrichment, **params)
+                    try:
+                        j = resp.json()
+                    except Exception:
+                        j = None
+
+                    if getattr(resp, "status_code", 0) != 200:
+                        data = {"error": f"HTTP {resp.status_code}", "body": j or getattr(resp, "text", "")}
+                    else:
+                        # Some PDL responses include a top-level "status"
+                        if isinstance(j, dict) and j.get("status") not in (None, 200):
+                            data = {"error": j.get("error", j)}
+                        else:
+                            data = (j or {}).get("data", j or {})
+                except Exception as e:
+                    data = {"error": str(e)}
+
+                memo[key] = data
+                return data
+
+            results_map: Dict[int, Dict] = {}
+
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
                 futures = [(idx, ex.submit(one, row.to_dict())) for idx, row in df_to_enrich.iterrows()]
                 for i, (idx, fut) in enumerate(futures, 1):
-                    # consume in submission order to keep progress smooth
                     try:
                         results_map[idx] = fut.result()
                     except Exception as e:
                         results_map[idx] = {"error": str(e)}
                     progress.progress(i / total)
 
-            # Store results in session state for download buttons
-            results_df = pd.DataFrame.from_dict(results_map, orient="index").reset_index(drop=True)
-            
-            # Clean up the data for better Excel/CSV formatting
-            cleaned_df = pd.DataFrame()
-            
-            # Start with original input data
+            # Build cleaned output rows efficiently
+            cleaned_rows: List[Dict[str, Any]] = []
             for idx, row in df_to_enrich.iterrows():
-                cleaned_row = {}
-                
-                # Add original columns from the uploaded file (without prefix)
+                cleaned_row: Dict[str, Any] = {}
+
+                # Original inputs
                 for col in df_to_enrich.columns:
                     cleaned_row[col] = row[col]
-                
-                # Get the enrichment result for this row
+
                 enrichment = results_map.get(idx, {})
-                
-                # If there's an error, add error column and continue
+
                 if "error" in enrichment:
                     cleaned_row["Error"] = enrichment.get("error", "Unknown error")
-                    cleaned_df = pd.concat([cleaned_df, pd.DataFrame([cleaned_row])], ignore_index=True)
+                    cleaned_rows.append(cleaned_row)
                     continue
-                
-                # Add enriched data with clean formatting
-                # Only add columns if they have data from PDL
-                
+
                 # Name fields
                 if enrichment.get("full_name"):
                     cleaned_row["Full_Name"] = enrichment.get("full_name", "")
@@ -511,10 +488,10 @@ if run_enrich:
                     cleaned_row["PDL_First_Name"] = enrichment.get("first_name", "")
                 if enrichment.get("last_name"):
                     cleaned_row["PDL_Last_Name"] = enrichment.get("last_name", "")
-                
-                # Emails - join multiple emails with semicolon
+
+                # Emails
                 emails = enrichment.get("emails", [])
-                if emails and isinstance(emails, list):
+                if isinstance(emails, list) and emails:
                     email_list = []
                     for email in emails:
                         if isinstance(email, dict) and "address" in email:
@@ -523,19 +500,19 @@ if run_enrich:
                             email_list.append(email)
                     if email_list:
                         cleaned_row["Emails"] = "; ".join(email_list)
-                
-                # Phone numbers - join multiple phones with semicolon
+
+                # Phones
                 phones = enrichment.get("phone_numbers", [])
-                if phones and isinstance(phones, list):
+                if isinstance(phones, list) and phones:
                     phone_list = []
-                    for phone in phones:
-                        if isinstance(phone, dict) and "number" in phone:
-                            phone_list.append(phone["number"])
-                        elif isinstance(phone, str):
-                            phone_list.append(phone)
+                    for ph in phones:
+                        if isinstance(ph, dict) and "number" in ph:
+                            phone_list.append(ph["number"])
+                        elif isinstance(ph, str):
+                            phone_list.append(ph)
                     if phone_list:
                         cleaned_row["Phone_Numbers"] = "; ".join(phone_list)
-                
+
                 # Social profiles
                 if enrichment.get("linkedin_url"):
                     cleaned_row["LinkedIn_URL"] = enrichment.get("linkedin_url", "")
@@ -543,8 +520,8 @@ if run_enrich:
                     cleaned_row["Facebook_URL"] = enrichment.get("facebook_url", "")
                 if enrichment.get("github_url"):
                     cleaned_row["GitHub_URL"] = enrichment.get("github_url", "")
-                
-                # Location data
+
+                # Location
                 if enrichment.get("location_street_address"):
                     cleaned_row["Street_Address"] = enrichment.get("location_street_address", "")
                 if enrichment.get("location_locality"):
@@ -555,73 +532,66 @@ if run_enrich:
                     cleaned_row["Postal_Code"] = enrichment.get("location_postal_code", "")
                 if enrichment.get("location_country"):
                     cleaned_row["Country"] = enrichment.get("location_country", "")
-                
-                # Work info
+
+                # Work
                 if enrichment.get("job_title"):
                     cleaned_row["Job_Title"] = enrichment.get("job_title", "")
                 if enrichment.get("job_company_name"):
                     cleaned_row["Company"] = enrichment.get("job_company_name", "")
-                
+
                 # Birth date
                 if enrichment.get("birth_date"):
                     cleaned_row["Birth_Date"] = enrichment.get("birth_date", "")
-                
-                # Add likelihood score if available
+
+                # Likelihood
                 if enrichment.get("likelihood"):
                     cleaned_row["Match_Score"] = enrichment.get("likelihood", "")
-                
-                cleaned_df = pd.concat([cleaned_df, pd.DataFrame([cleaned_row])], ignore_index=True)
-            
-            # Store cleaned dataframe
-            st.session_state['results_df'] = cleaned_df
-            
-            # Show success message and download buttons in col4
+
+                cleaned_rows.append(cleaned_row)
+
+            cleaned_df = pd.DataFrame(cleaned_rows)
+            st.session_state["results_df"] = cleaned_df
+
             with result_container:
                 st.success(f"✅ Enrichment successful! Processed {len(results_map)} rows.")
-                
-                # Create download data once and store in session state
-                if 'csv_data' not in st.session_state or 'excel_data' not in st.session_state:
-                    # CSV data
-                    st.session_state['csv_data'] = cleaned_df.to_csv(index=False).encode("utf-8")
-                    
-                    # Excel data
-                    try:
-                        excel_buffer = io.BytesIO()
-                        with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-                            cleaned_df.to_excel(writer, index=False, sheet_name="Enriched_Data")
-                            
-                            # Auto-adjust column widths
-                            worksheet = writer.sheets["Enriched_Data"]
-                            for idx, col in enumerate(cleaned_df.columns):
-                                max_len = max(
-                                    cleaned_df[col].astype(str).str.len().max(),
-                                    len(col)
-                                ) + 2
-                                worksheet.set_column(idx, idx, min(max_len, 50))
-                        
-                        st.session_state['excel_data'] = excel_buffer.getvalue()
-                    except Exception as e:
-                        st.warning(f"Excel export unavailable: {e}")
-                        st.session_state['excel_data'] = None
-                
-                # Download buttons using session state data
-                if 'csv_data' in st.session_state:
-                    csv_col, excel_col = st.columns(2)
-                    with csv_col:
-                        st.download_button(
-                            "📄 Download CSV",
-                            data=st.session_state['csv_data'],
-                            file_name="enriched_results.csv",
-                            mime="text/csv",
-                            key="csv_download"
-                        )
-                    
-                    with excel_col:
-                        if 'excel_data' in st.session_state and st.session_state['excel_data']:
-                            st.download_button(
-                                "📊 Download Excel",
-                                data=st.session_state['excel_data'],
-                                file_name="enriched_results.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key="excel_download"
-                            )
+
+            # Prepare downloadable artifacts and persist in session
+            st.session_state["csv_data"] = cleaned_df.to_csv(index=False).encode("utf-8")
+
+            try:
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+                    cleaned_df.to_excel(writer, index=False, sheet_name="Enriched_Data")
+                    worksheet = writer.sheets["Enriched_Data"]
+                    for i, col in enumerate(cleaned_df.columns):
+                        max_len = max(cleaned_df[col].astype(str).str.len().max(), len(col)) + 2
+                        worksheet.set_column(i, i, min(max_len, 50))
+                st.session_state["excel_data"] = excel_buffer.getvalue()
+            except Exception as e:
+                st.warning(f"Excel export unavailable: {e}")
+                st.session_state["excel_data"] = None
+
+# ---------------------------
+# Always-on Download buttons (persist across reruns)
+# ---------------------------
+with col4:
+    if "csv_data" in st.session_state or st.session_state.get("excel_data"):
+        st.markdown("### Downloads")
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "📄 Download CSV",
+                data=st.session_state.get("csv_data", b""),
+                file_name="enriched_results.csv",
+                mime="text/csv",
+                key="csv_download",
+            )
+        with dl2:
+            if st.session_state.get("excel_data"):
+                st.download_button(
+                    "📊 Download Excel",
+                    data=st.session_state["excel_data"],
+                    file_name="enriched_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="excel_download",
+                )
