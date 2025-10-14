@@ -605,20 +605,23 @@ if run_enrich:
                         st.session_state['excel_data'] = None
                 
                 # Download buttons using session state data
-                if 'csv_data' in st.session_state and st.session_state['csv_data']:
-                    st.download_button(
-                        "📄 Download CSV",
-                        data=st.session_state['csv_data'],
-                        file_name="enriched_results.csv",
-                        mime="text/csv",
-                        key=f"download_csv_btn_{int(time.time())}"  # Unique key to prevent disappearing
-                    )
-                
-                if 'excel_data' in st.session_state and st.session_state.get('excel_data'):
-                    st.download_button(
-                        "📊 Download Excel",
-                        data=st.session_state['excel_data'],
-                        file_name="enriched_results.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"download_excel_btn_{int(time.time())}"  # Unique key to prevent disappearing
-                    )
+                if 'csv_data' in st.session_state:
+                    csv_col, excel_col = st.columns(2)
+                    with csv_col:
+                        st.download_button(
+                            "📄 Download CSV",
+                            data=st.session_state['csv_data'],
+                            file_name="enriched_results.csv",
+                            mime="text/csv",
+                            key="csv_download"
+                        )
+                    
+                    with excel_col:
+                        if 'excel_data' in st.session_state and st.session_state['excel_data']:
+                            st.download_button(
+                                "📊 Download Excel",
+                                data=st.session_state['excel_data'],
+                                file_name="enriched_results.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key="excel_download"
+                            )
