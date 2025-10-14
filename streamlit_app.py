@@ -14,7 +14,7 @@ from peopledatalabs import PDLPY
 # ---------------------------
 # App config (must be first Streamlit call)
 # ---------------------------
-st.set_page_config(page_title="Get Contact Info", layout="wide")
+st.set_page_config(page_title="Contact Enrichment Tool", layout="wide")
 
 # ---------------------------
 # Helpers & caching
@@ -255,7 +255,7 @@ div[data-testid="stFileUploader"] .drag-and-drop-area { display: none !important
     unsafe_allow_html=True,
 )
 
-st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>Get Contact Info</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4F8BF9;'>Contact Enrichment Tool</h1>", unsafe_allow_html=True)
 
 # ---------------------------
 # Layout & state
