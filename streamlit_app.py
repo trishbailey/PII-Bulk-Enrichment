@@ -225,9 +225,28 @@ def call_with_backoff(fn, *args, retries: int = 3, base: float = 0.6, **kwargs):
 # ---------------------------
 # Secrets / API init (PRODUCTION)
 # ---------------------------
-api_key = st.secrets.get("PDL_API_KEY") or os.getenv("PDL_API_KEY")
+def _load_pdl_api_key() -> str:
+    """Prefer the PDL_API_KEY environment variable; fall back to Streamlit secrets.
+
+    Never commit a real key. Locally, export PDL_API_KEY or create an untracked
+    .streamlit/secrets.toml (see .streamlit/secrets.toml.example).
+    """
+    key = os.environ.get("PDL_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        # st.secrets raises if no secrets.toml exists, so guard it.
+        return str(st.secrets.get("PDL_API_KEY", "")).strip()
+    except Exception:
+        return ""
+
+
+api_key = _load_pdl_api_key()
 if not api_key:
-    st.error("No PDL API key found. Add PDL_API_KEY to Streamlit Secrets or environment.")
+    st.error(
+        "No PDL API key found. Set the PDL_API_KEY environment variable "
+        "(or add it to an untracked .streamlit/secrets.toml)."
+    )
     st.stop()
 
 client = PDLPY(api_key=api_key, sandbox=False)  # Production mode — charges apply
